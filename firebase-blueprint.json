@@ -1,0 +1,113 @@
+{
+  "entities": {
+    "StudentSession": {
+      "title": "StudentSession",
+      "description": "Represents a student's Digital SAT exam session and real-time score breakdown.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique session identifier",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Student full name",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "password": {
+          "type": "string",
+          "description": "Student session access password",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "status": {
+          "type": "string",
+          "enum": ["in_progress", "break", "completed"],
+          "maxLength": 32
+        },
+        "currentModule": {
+          "type": "string",
+          "enum": ["rw_1", "rw_2", "math_1", "math_2"],
+          "maxLength": 16
+        },
+        "currentQuestionIndex": {
+          "type": "number",
+          "description": "Zero-based index of active question in module"
+        },
+        "viewMode": {
+          "type": "string",
+          "enum": ["question", "review"],
+          "maxLength": 16
+        },
+        "startedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "fullName",
+        "password",
+        "status",
+        "currentModule",
+        "currentQuestionIndex",
+        "viewMode",
+        "startedAt",
+        "updatedAt"
+      ]
+    },
+    "SATQuestion": {
+      "title": "SATQuestion",
+      "description": "Represents a Digital SAT question in one of the 4 modules.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "moduleId": {
+          "type": "string",
+          "enum": ["rw_1", "rw_2", "math_1", "math_2"],
+          "maxLength": 16
+        },
+        "number": {
+          "type": "number"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["mcq", "spr"],
+          "maxLength": 16
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "correctAnswer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "moduleId", "number", "type", "prompt", "correctAnswer"]
+    }
+  },
+  "firestore": {
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/StudentSession" },
+      "description": "Stores real-time student exam sessions and scores"
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/SATQuestion" },
+      "description": "Stores custom or updated SAT exam questions"
+    }
+  }
+}

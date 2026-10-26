@@ -1,0 +1,6 @@
+{
+  "name": "Bluebook Digital SAT Platform",
+  "description": "Real-time Digital SAT exam simulator with live database scoring, full Bluebook tools (Desmos calculator, reference sheet, highlighter, option eliminator), and live Admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

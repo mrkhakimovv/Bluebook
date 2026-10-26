@@ -1,0 +1,34 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #0f172a;
+    background-color: #f8fafc;
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .font-serif,
+  .sat-serif {
+    font-family: 'Source Serif 4', Charter, 'Bitstream Charter', Georgia, Cambria, "Times New Roman", Times, serif;
+    font-optical-sizing: auto;
+    letter-spacing: -0.005em;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+}
+
+.katex {
+  font-size: 1.06em !important;
+  color: inherit;
+}
+
+u {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
