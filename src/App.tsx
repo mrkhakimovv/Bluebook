@@ -1,5 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { SATQuestion, StudentSession, MODULE_CONFIGS } from './types/sat';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import {
+  SATQuestion,
+  StudentSession,
+  MODULE_CONFIGS,
+  MODULE_ORDER,
+  ModuleId,
+} from './types/sat';
 import {
   generateDefaultQuestions,
   calculateSATScore,
@@ -9,8 +15,12 @@ import {
   subscribeToQuestions,
   saveSessionToFirestore,
   removeSessionFromFirestore,
-  saveQuestionToFirestore,
+  applyQuestionChanges,
 } from './firebase';
+import {
+  normalizeQuestionInput,
+  validateQuestionInput,
+} from './utils/questionValidation';
 import { LoginView } from './components/LoginView';
 import { BluebookExamView } from './components/BluebookExamView';
 import { StudentResultView } from './components/StudentResultModal';
@@ -19,18 +29,40 @@ import { AdminDashboard } from './components/AdminDashboard';
 export default function App() {
   const [role, setRole] = useState<'guest' | 'student' | 'admin'>('guest');
   const [adminName, setAdminName] = useState('Administrator');
-  const [questions, setQuestions] = useState<SATQuestion[]>(() =>
-    generateDefaultQuestions()
-  );
+  const defaultQuestions = useMemo(() => generateDefaultQuestions(), []);
+  const [fsQuestions, setFsQuestions] = useState<SATQuestion[]>([]);
   const [sessions, setSessions] = useState<StudentSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [viewingResultEarly, setViewingResultEarly] = useState(false);
 
+  // Per-module question source: if Firestore has questions for a module, use those (sorted by number);
+  // otherwise fall back to generateDefaultQuestions() for that module.
+  const questions = useMemo(() => {
+    const result: SATQuestion[] = [];
+    for (const modId of MODULE_ORDER) {
+      const modFs = fsQuestions
+        .filter((q) => q.moduleId === modId)
+        .sort((a, b) => a.number - b.number);
+      if (modFs.length > 0) {
+        result.push(...modFs);
+      } else {
+        const modDef = defaultQuestions
+          .filter((q) => q.moduleId === modId)
+          .sort((a, b) => a.number - b.number);
+        result.push(...modDef);
+      }
+    }
+    return result;
+  }, [fsQuestions, defaultQuestions]);
+
   // Refs to prevent stale closures in timers or async callbacks
   const sessionsRef = useRef<StudentSession[]>(sessions);
   sessionsRef.current = sessions;
+
+  const fsQuestionsRef = useRef<SATQuestion[]>(fsQuestions);
+  fsQuestionsRef.current = fsQuestions;
 
   const questionsRef = useRef<SATQuestion[]>(questions);
   questionsRef.current = questions;
@@ -75,18 +107,7 @@ export default function App() {
     });
 
     const unsubQuestions = subscribeToQuestions((firestoreQuestions) => {
-      if (firestoreQuestions.length > 0) {
-        setQuestions((prev) => {
-          const map = new Map<string, SATQuestion>();
-          for (const q of prev) {
-            map.set(q.id, q);
-          }
-          for (const fq of firestoreQuestions) {
-            map.set(fq.id, fq);
-          }
-          return Array.from(map.values());
-        });
-      }
+      setFsQuestions(firestoreQuestions);
     });
 
     return () => {
@@ -95,20 +116,12 @@ export default function App() {
     };
   }, []);
 
-  // Load initial state from server
+  // Load initial sessions state from server (questions come exclusively from Firestore / defaults)
   const fetchState = useCallback(async () => {
     try {
       const res = await fetch('/api/state');
       if (res.ok) {
         const data = await res.json();
-        if (data.questions && data.questions.length > 0) {
-          setQuestions((prev) => {
-            const map = new Map<string, SATQuestion>();
-            for (const q of data.questions as SATQuestion[]) map.set(q.id, q);
-            for (const q of prev) map.set(q.id, q);
-            return Array.from(map.values());
-          });
-        }
         if (data.sessions && Array.isArray(data.sessions)) {
           setSessions((prev) => {
             if (prev.length > 0) return prev;
@@ -335,36 +348,147 @@ export default function App() {
     fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).catch(() => {});
   };
 
-  const handleUpdateQuestion = async (updatedQ: SATQuestion) => {
-    setQuestions((prev) =>
-      prev.map((q) => (q.id === updatedQ.id ? updatedQ : q))
-    );
-    await saveQuestionToFirestore(updatedQ);
-    fetch(`/api/questions/${updatedQ.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedQ),
-    }).catch(() => {});
+  const handleUpdateQuestion = async (rawUpdatedQ: SATQuestion) => {
+    const normalized = normalizeQuestionInput(rawUpdatedQ);
+    const err = validateQuestionInput(normalized);
+    if (err) {
+      throw new Error(err);
+    }
+
+    const modId = normalized.moduleId;
+    const modHasFs = fsQuestionsRef.current.some((q) => q.moduleId === modId);
+    const currentModQuestions = questionsRef.current
+      .filter((q) => q.moduleId === modId)
+      .sort((a, b) => a.number - b.number);
+
+    const toSave: SATQuestion[] = modHasFs
+      ? [normalized]
+      : currentModQuestions.map((q) => (q.id === normalized.id ? normalized : q));
+
+    await applyQuestionChanges(toSave, []);
+
+    setFsQuestions((prev) => {
+      const map = new Map<string, SATQuestion>();
+      for (const q of prev) map.set(q.id, q);
+      for (const q of toSave) map.set(q.id, q);
+      return Array.from(map.values());
+    });
   };
 
   const handleAddQuestion = async (
-    newQ: Omit<SATQuestion, 'id' | 'number'>
+    rawNewQ: Omit<SATQuestion, 'id' | 'number'>
   ) => {
-    const modQs = questionsRef.current.filter(
-      (q) => q.moduleId === newQ.moduleId
-    );
+    const normalized = normalizeQuestionInput(rawNewQ);
+    const err = validateQuestionInput(normalized);
+    if (err) {
+      throw new Error(err);
+    }
+
+    const modId = normalized.moduleId;
+    const modHasFs = fsQuestionsRef.current.some((q) => q.moduleId === modId);
+    const currentModQuestions = questionsRef.current
+      .filter((q) => q.moduleId === modId)
+      .sort((a, b) => a.number - b.number);
+
     const created: SATQuestion = {
-      ...newQ,
-      id: `${newQ.moduleId}_q${Date.now()}`,
-      number: modQs.length + 1,
+      ...normalized,
+      id: `${modId}_q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      number: currentModQuestions.length + 1,
     };
-    setQuestions((prev) => [...prev, created]);
-    await saveQuestionToFirestore(created);
-    fetch('/api/questions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newQ),
-    }).catch(() => {});
+
+    const toSave: SATQuestion[] = modHasFs
+      ? [created]
+      : [...currentModQuestions, created];
+
+    await applyQuestionChanges(toSave, []);
+
+    setFsQuestions((prev) => {
+      const map = new Map<string, SATQuestion>();
+      for (const q of prev) map.set(q.id, q);
+      for (const q of toSave) map.set(q.id, q);
+      return Array.from(map.values());
+    });
+  };
+
+  const handleDeleteQuestion = async (questionId: string) => {
+    const target = questionsRef.current.find((q) => q.id === questionId);
+    if (!target) return;
+
+    const modId = target.moduleId;
+    const remaining = questionsRef.current
+      .filter((q) => q.moduleId === modId && q.id !== questionId)
+      .sort((a, b) => a.number - b.number)
+      .map((q, idx) => ({
+        ...q,
+        number: idx + 1,
+      }));
+
+    await applyQuestionChanges(remaining, [questionId]);
+
+    setFsQuestions((prev) => {
+      const filtered = prev.filter((q) => q.id !== questionId);
+      const map = new Map<string, SATQuestion>();
+      for (const q of filtered) map.set(q.id, q);
+      for (const q of remaining) map.set(q.id, q);
+      return Array.from(map.values());
+    });
+  };
+
+  const handleImportQuestions = async (
+    items: Omit<SATQuestion, 'id' | 'number'>[]
+  ) => {
+    if (items.length === 0) return;
+
+    const byModule = new Map<ModuleId, Omit<SATQuestion, 'id' | 'number'>[]>();
+    for (const item of items) {
+      const normalized = normalizeQuestionInput(item);
+      const err = validateQuestionInput(normalized);
+      if (err) {
+        throw new Error(err);
+      }
+      const list = byModule.get(normalized.moduleId) || [];
+      list.push(normalized);
+      byModule.set(normalized.moduleId, list);
+    }
+
+    const toSave: SATQuestion[] = [];
+    const removeIds: string[] = [];
+
+    for (const [modId, modItems] of byModule.entries()) {
+      const existingModIds = new Set<string>();
+      for (const q of fsQuestionsRef.current) {
+        if (q.moduleId === modId) existingModIds.add(q.id);
+      }
+      for (const q of questionsRef.current) {
+        if (q.moduleId === modId) existingModIds.add(q.id);
+      }
+
+      const newSavedIds = new Set<string>();
+      modItems.forEach((item, idx) => {
+        const num = idx + 1;
+        const id = `${modId}_q${num}`;
+        newSavedIds.add(id);
+        toSave.push({
+          ...item,
+          id,
+          number: num,
+        });
+      });
+
+      for (const oldId of existingModIds) {
+        if (!newSavedIds.has(oldId)) {
+          removeIds.push(oldId);
+        }
+      }
+    }
+
+    await applyQuestionChanges(toSave, removeIds);
+
+    const importedModules = new Set(byModule.keys());
+    setFsQuestions((prev) => {
+      const kept = prev.filter((q) => !importedModules.has(q.moduleId));
+      return [...kept, ...toSave];
+    });
   };
 
   if (role === 'admin') {
@@ -377,6 +501,8 @@ export default function App() {
         onResetSession={handleResetSession}
         onUpdateQuestion={handleUpdateQuestion}
         onAddQuestion={handleAddQuestion}
+        onDeleteQuestion={handleDeleteQuestion}
+        onImportQuestions={handleImportQuestions}
         onLogout={() => {
           setRole('guest');
           setActiveSessionId(null);

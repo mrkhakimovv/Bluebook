@@ -95,6 +95,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64
+        },
+        "skill": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "medium", "hard"],
+          "maxLength": 16
         }
       },
       "required": ["id", "moduleId", "number", "type", "prompt", "correctAnswer"]

@@ -11,6 +11,7 @@ import {
   query,
   where,
   limit,
+  writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { SATQuestion, StudentSession } from './types/sat';
@@ -163,6 +164,12 @@ export function sanitizeQuestionForFirestore(
   if (q.domain) {
     payload.domain = q.domain.slice(0, 120);
   }
+  if (q.skill) {
+    payload.skill = q.skill.slice(0, 120);
+  }
+  if (q.difficulty && ['easy', 'medium', 'hard'].includes(q.difficulty)) {
+    payload.difficulty = q.difficulty;
+  }
   if (q.options && q.options.length > 0) {
     payload.options = q.options.slice(0, 8);
   }
@@ -202,6 +209,49 @@ export async function saveQuestionToFirestore(question: SATQuestion) {
     await setDoc(doc(db, 'questions', docId), sanitized);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function applyQuestionChanges(
+  save: SATQuestion[],
+  removeIds: string[]
+) {
+  type Op =
+    | { kind: 'save'; docId: string; data: Record<string, unknown> }
+    | { kind: 'delete'; docId: string };
+
+  const ops: Op[] = [];
+
+  for (const rawId of removeIds) {
+    const safeId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+    if (safeId) {
+      ops.push({ kind: 'delete', docId: safeId });
+    }
+  }
+
+  for (const q of save) {
+    const sanitized = sanitizeQuestionForFirestore(q);
+    const docId = String(sanitized.id);
+    ops.push({ kind: 'save', docId, data: sanitized });
+  }
+
+  const CHUNK_SIZE = 400;
+  for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+    const chunk = ops.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+    for (const op of chunk) {
+      const ref = doc(db, 'questions', op.docId);
+      if (op.kind === 'save') {
+        batch.set(ref, op.data);
+      } else {
+        batch.delete(ref);
+      }
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'questions');
+    }
   }
 }
 

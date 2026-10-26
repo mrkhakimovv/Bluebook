@@ -1,6 +1,26 @@
 export type QuestionType = 'mcq' | 'spr';
 
+export type QuestionDifficulty = 'easy' | 'medium' | 'hard';
+
 export type ModuleId = 'rw_1' | 'rw_2' | 'math_1' | 'math_2';
+
+export const RW_DOMAINS = [
+  'Craft and Structure',
+  'Information and Ideas',
+  'Standard English Conventions',
+  'Expression of Ideas',
+] as const;
+
+export const MATH_DOMAINS = [
+  'Algebra',
+  'Advanced Math',
+  'Problem-Solving and Data Analysis',
+  'Geometry and Trigonometry',
+] as const;
+
+export function domainsForModule(moduleId: ModuleId): readonly string[] {
+  return moduleId.startsWith('rw_') ? RW_DOMAINS : MATH_DOMAINS;
+}
 
 export interface ModuleConfig {
   id: ModuleId;
@@ -30,6 +50,8 @@ export interface SATQuestion {
   correctAnswer: string;
   explanation?: string;
   domain?: string;
+  skill?: string;
+  difficulty?: QuestionDifficulty;
 }
 
 export interface HighlightAnnotation {
@@ -68,7 +90,7 @@ export interface StudentSession {
   status: 'in_progress' | 'break' | 'completed';
   currentModule: ModuleId;
   currentQuestionIndex: number;
-   viewMode: 'question' | 'review';
+  viewMode: 'question' | 'review';
   answers: Record<string, string>;
   flagged: Record<string, boolean>;
   eliminated: Record<string, string[]>;
@@ -110,7 +132,7 @@ export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
     moduleNumber: 1,
     title: 'Section 2, Module 1: Math',
     shortTitle: 'Math M1',
-    durationSeconds: 32 * 60, // Matching 31:57 screenshot timer default (32 mins)
+    durationSeconds: 32 * 60,
     questionCount: 22,
     directions:
       'The questions in this section address a number of important math skills. Use of an approved calculator is permitted for all questions. Unless otherwise indicated: all variables and expressions represent real numbers; figures provided are drawn to scale; all figures lie in a plane; and the domain of a given function f is the set of all real numbers x for which f(x) is a real number.',

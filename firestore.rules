@@ -94,7 +94,9 @@ service cloud.firestore {
         'options',
         'correctAnswer',
         'explanation',
-        'domain'
+        'domain',
+        'skill',
+        'difficulty'
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.moduleId is string && data.moduleId.size() <= 16 && data.moduleId in ['rw_1', 'rw_2', 'math_1', 'math_2'] &&
@@ -105,6 +107,8 @@ service cloud.firestore {
       (!('passage' in data) || (data.passage is string && data.passage.size() <= 8000)) &&
       (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 4000)) &&
       (!('domain' in data) || (data.domain is string && data.domain.size() <= 120)) &&
+      (!('skill' in data) || (data.skill is string && data.skill.size() <= 120)) &&
+      (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 16 && data.difficulty in ['easy', 'medium', 'hard'])) &&
       (!('options' in data) || (data.options is list && data.options.size() <= 8)) &&
       (!('mathEquation' in data) || (data.mathEquation is list && data.mathEquation.size() <= 10));
     }

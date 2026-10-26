@@ -1,0 +1,47 @@
+{
+  "questions": [
+    {
+      "moduleId": "rw_2",
+      "type": "mcq",
+      "domain": "Craft and Structure",
+      "skill": "Words in Context",
+      "difficulty": "medium",
+      "passage": "While researching marine bioluminescence, biologist Edith Widder noticed that traditional submersibles with bright lights and noisy thrusters often ______ deep-sea organisms, causing them to flee before scientists could observe their natural behaviors.",
+      "prompt": "Which choice completes the text with the most logical and precise word or phrase?",
+      "options": {
+        "A": "startled",
+        "B": "cultivated",
+        "C": "authenticated",
+        "D": "replenished"
+      },
+      "correctAnswer": "A",
+      "explanation": "Bright lights and noisy thrusters would frighten or 'startle' deep-sea organisms, causing them to flee."
+    },
+    {
+      "moduleId": "math_2",
+      "type": "mcq",
+      "domain": "Advanced Math",
+      "skill": "Equivalent Expressions",
+      "difficulty": "medium",
+      "prompt": "Which expression is equivalent to $\\frac{x^2 - 9}{x + 3}$ for all $x \\neq -3$?",
+      "options": [
+        "x - 3",
+        "x + 3",
+        "x^2 - 3",
+        "x - 9"
+      ],
+      "correctAnswer": "A",
+      "explanation": "Since $x^2 - 9 = (x - 3)(x + 3)$, dividing by $x + 3$ gives $x - 3$."
+    },
+    {
+      "moduleId": "math_2",
+      "type": "spr",
+      "domain": "Algebra",
+      "skill": "Linear Equations in One Variable",
+      "difficulty": "easy",
+      "prompt": "If $4(2x - 3) = 28$, what is the value of $x$?",
+      "correctAnswer": "5",
+      "explanation": "Dividing both sides by 4 gives $2x - 3 = 7$, so $2x = 10$ and $x = 5$."
+    }
+  ]
+}
