@@ -2,7 +2,7 @@
   "entities": {
     "StudentSession": {
       "title": "StudentSession",
-      "description": "Represents a student's Digital SAT exam session and real-time score breakdown.",
+      "description": "Represents a student's Digital SAT exam session, adaptive routing, and Rasch score breakdown.",
       "type": "object",
       "properties": {
         "id": {
@@ -65,7 +65,7 @@
     },
     "SATQuestion": {
       "title": "SATQuestion",
-      "description": "Represents a Digital SAT question in one of the 4 modules.",
+      "description": "Represents a Digital SAT question with Rasch IRT calibration parameters.",
       "type": "object",
       "properties": {
         "id": {
@@ -104,19 +104,73 @@
           "type": "string",
           "enum": ["easy", "medium", "hard"],
           "maxLength": 16
+        },
+        "variant": {
+          "type": "string",
+          "enum": ["easy", "hard"],
+          "maxLength": 16
+        },
+        "scored": {
+          "type": "boolean"
+        },
+        "b": {
+          "type": "number"
+        },
+        "bSE": {
+          "type": "number"
+        },
+        "infit": {
+          "type": "number"
+        },
+        "outfit": {
+          "type": "number"
+        },
+        "calibratedAt": {
+          "type": "number"
         }
       },
       "required": ["id", "moduleId", "number", "type", "prompt", "correctAnswer"]
+    },
+    "ScoringConfig": {
+      "title": "ScoringConfig",
+      "description": "Rasch IRT scaling and Stage 2 routing parameters.",
+      "type": "object",
+      "properties": {
+        "version": { "type": "number" },
+        "A_rw": { "type": "number" },
+        "B_rw": { "type": "number" },
+        "A_math": { "type": "number" },
+        "B_math": { "type": "number" },
+        "cutRW": { "type": "number" },
+        "cutMath": { "type": "number" },
+        "extremeAdjust": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": [
+        "version",
+        "A_rw",
+        "B_rw",
+        "A_math",
+        "B_math",
+        "cutRW",
+        "cutMath",
+        "extremeAdjust",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
     "/sessions/{sessionId}": {
       "schema": { "$ref": "#/entities/StudentSession" },
-      "description": "Stores real-time student exam sessions and scores"
+      "description": "Stores real-time student exam sessions, adaptive routing, and Rasch results"
     },
     "/questions/{questionId}": {
       "schema": { "$ref": "#/entities/SATQuestion" },
-      "description": "Stores custom or updated SAT exam questions"
+      "description": "Stores SAT exam questions and Rasch IRT item parameters"
+    },
+    "/config/{docId}": {
+      "schema": { "$ref": "#/entities/ScoringConfig" },
+      "description": "Stores psychometric scoring configuration (/config/scoring)"
     }
   }
 }

@@ -5,21 +5,33 @@ import {
   MODULE_CONFIGS,
   MODULE_ORDER,
   ModuleId,
+  ScoringConfig,
+  DEFAULT_SCORING_CONFIG,
 } from './types/sat';
 import {
   generateDefaultQuestions,
   calculateSATScore,
+  isAnswerCorrect,
 } from './data/defaultQuestions';
+import { scoreSession } from './lib/scoring/rasch';
 import {
   subscribeToSessions,
   subscribeToQuestions,
+  subscribeToScoringConfig,
   saveSessionToFirestore,
+  saveBatchSessionsToFirestore,
   removeSessionFromFirestore,
   applyQuestionChanges,
+  saveScoringConfig,
+  saveItemParams,
+  CalibratedItemParamInput,
 } from './firebase';
 import {
   normalizeQuestionInput,
   validateQuestionInput,
+  getSessionVariantQuestions,
+  getActiveModulesForQuestions,
+  getModuleVariantKey,
 } from './utils/questionValidation';
 import { LoginView } from './components/LoginView';
 import { BluebookExamView } from './components/BluebookExamView';
@@ -32,27 +44,36 @@ export default function App() {
   const defaultQuestions = useMemo(() => generateDefaultQuestions(), []);
   const [fsQuestions, setFsQuestions] = useState<SATQuestion[]>([]);
   const [sessions, setSessions] = useState<StudentSession[]>([]);
+  const [scoringConfig, setScoringConfig] = useState<ScoringConfig>(
+    DEFAULT_SCORING_CONFIG
+  );
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [viewingResultEarly, setViewingResultEarly] = useState(false);
 
-  // Per-module question source: if Firestore has questions for a module, use those (sorted by number);
-  // otherwise fall back to generateDefaultQuestions() for that module.
+  // Question bank source: if Firestore has any questions, use strictly the Firestore questions;
+  // otherwise fall back to defaultQuestions. Always deduplicate by question ID.
   const questions = useMemo(() => {
+    const rawSource = fsQuestions.length > 0 ? fsQuestions : defaultQuestions;
+    const uniqueById = new Map<string, SATQuestion>();
+    for (const q of rawSource) {
+      if (q && q.id) {
+        uniqueById.set(q.id, q);
+      }
+    }
+    const source = Array.from(uniqueById.values());
     const result: SATQuestion[] = [];
     for (const modId of MODULE_ORDER) {
-      const modFs = fsQuestions
+      const modQs = source
         .filter((q) => q.moduleId === modId)
-        .sort((a, b) => a.number - b.number);
-      if (modFs.length > 0) {
-        result.push(...modFs);
-      } else {
-        const modDef = defaultQuestions
-          .filter((q) => q.moduleId === modId)
-          .sort((a, b) => a.number - b.number);
-        result.push(...modDef);
-      }
+        .sort(
+          (a, b) =>
+            (a.variant || '').localeCompare(b.variant || '') ||
+            a.number - b.number ||
+            a.id.localeCompare(b.id)
+        );
+      result.push(...modQs);
     }
     return result;
   }, [fsQuestions, defaultQuestions]);
@@ -66,6 +87,9 @@ export default function App() {
 
   const questionsRef = useRef<SATQuestion[]>(questions);
   questionsRef.current = questions;
+
+  const scoringConfigRef = useRef<ScoringConfig>(scoringConfig);
+  scoringConfigRef.current = scoringConfig;
 
   const activeSessionIdRef = useRef<string | null>(activeSessionId);
   activeSessionIdRef.current = activeSessionId;
@@ -83,8 +107,6 @@ export default function App() {
         }
         for (const fs of firestoreSessions) {
           const existingLocal = mergedMap.get(fs.id);
-          // If this is the currently active student taking the test locally,
-          // never let an older in-flight Firestore snapshot overwrite newer local progress
           if (
             roleRef.current === 'student' &&
             activeSessionIdRef.current === fs.id &&
@@ -107,16 +129,27 @@ export default function App() {
     });
 
     const unsubQuestions = subscribeToQuestions((firestoreQuestions) => {
-      setFsQuestions(firestoreQuestions);
+      const map = new Map<string, SATQuestion>();
+      for (const q of firestoreQuestions) {
+        if (q && q.id) {
+          map.set(q.id, q);
+        }
+      }
+      setFsQuestions(Array.from(map.values()));
+    });
+
+    const unsubScoringConfig = subscribeToScoringConfig((cfg) => {
+      setScoringConfig(cfg);
     });
 
     return () => {
       unsubSessions();
       unsubQuestions();
+      unsubScoringConfig();
     };
   }, []);
 
-  // Load initial sessions state from server (questions come exclusively from Firestore / defaults)
+  // Load initial sessions state from server
   const fetchState = useCallback(async () => {
     try {
       const res = await fetch('/api/state');
@@ -140,6 +173,11 @@ export default function App() {
 
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) || null;
+
+  const activeVariantQuestions = useMemo(() => {
+    if (!activeSession) return questions;
+    return getSessionVariantQuestions(questions, activeSession.id);
+  }, [questions, activeSession?.id]);
 
   const handleLogin = async (
     fullName: string,
@@ -179,14 +217,26 @@ export default function App() {
           )
         : undefined;
 
+      const cfg = scoringConfigRef.current;
+
       if (!targetSession) {
         const now = new Date().toISOString();
+        const sessionId = `sess_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 7)}`;
+        const variantQs = getSessionVariantQuestions(
+          questionsRef.current,
+          sessionId
+        );
+        const activeMods = getActiveModulesForQuestions(variantQs);
+        const firstModule: ModuleId = activeMods[0] || 'rw_1';
+
         targetSession = {
-          id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          id: sessionId,
           fullName: cleanName,
           password: cleanPass,
           status: 'in_progress',
-          currentModule: 'rw_1',
+          currentModule: firstModule,
           currentQuestionIndex: 0,
           viewMode: 'question',
           answers: {},
@@ -202,15 +252,29 @@ export default function App() {
           completedModules: [],
           startedAt: now,
           updatedAt: now,
-          score: calculateSATScore(questionsRef.current, {}),
+          score: calculateSATScore(variantQs, {}, cfg),
         };
       } else {
+        const variantQs = getSessionVariantQuestions(
+          questionsRef.current,
+          targetSession.id
+        );
+        const activeMods = getActiveModulesForQuestions(variantQs);
+        const validCurrentModule = activeMods.includes(
+          targetSession.currentModule
+        )
+          ? targetSession.currentModule
+          : activeMods[0] || 'rw_1';
+
         targetSession = {
           ...targetSession,
+          currentModule: validCurrentModule,
           updatedAt: new Date().toISOString(),
           score: calculateSATScore(
-            questionsRef.current,
-            targetSession.answers || {}
+            variantQs,
+            targetSession.answers || {},
+            cfg,
+            targetSession.routing
           ),
         };
       }
@@ -229,7 +293,6 @@ export default function App() {
       setViewingResultEarly(false);
       setRole('student');
 
-      // Save to Firestore (wissenapk1) in background
       await saveSessionToFirestore(finalSession);
 
       fetch('/api/auth/login', {
@@ -257,11 +320,26 @@ export default function App() {
       const latestActive = sessionsRef.current.find((s) => s.id === currentId);
       if (!latestActive) return;
 
+      const cfg = scoringConfigRef.current;
       const mergedAnswers = updates.answers ?? latestActive.answers;
-      const newScore = calculateSATScore(questionsRef.current, mergedAnswers);
+      const mergedRouting = updates.routing ?? latestActive.routing;
+      const mergedRoutingTheta =
+        updates.routingTheta ?? latestActive.routingTheta;
+      const mergedStatus = updates.status ?? latestActive.status;
+
+      const variantQs = getSessionVariantQuestions(
+        questionsRef.current,
+        currentId
+      );
+      const newScore = calculateSATScore(
+        variantQs,
+        mergedAnswers,
+        cfg,
+        mergedRouting
+      );
       const nowIso = new Date().toISOString();
 
-      const updatedSession: StudentSession = {
+      const draftSession: StudentSession = {
         ...latestActive,
         ...updates,
         answers: mergedAnswers,
@@ -272,25 +350,32 @@ export default function App() {
           updates.moduleTimeRemaining ?? latestActive.moduleTimeRemaining,
         completedModules:
           updates.completedModules ?? latestActive.completedModules,
+        routing: mergedRouting,
+        routingTheta: mergedRoutingTheta,
         score: newScore,
         updatedAt: nowIso,
-        ...(updates.status === 'completed' && !latestActive.completedAt
+        ...(mergedStatus === 'completed' && !latestActive.completedAt
           ? { completedAt: nowIso }
           : {}),
       };
 
-      // Update ref immediately so back-to-back calls never see stale state
+      if (mergedStatus === 'completed' || draftSession.result) {
+        draftSession.result = scoreSession(
+          draftSession,
+          variantQs,
+          cfg
+        );
+      }
+
       sessionsRef.current = sessionsRef.current.map((s) =>
-        s.id === currentId ? updatedSession : s
+        s.id === currentId ? draftSession : s
       );
       setSessions(sessionsRef.current);
 
-      // Persist to Firestore (wissenapk1)
-      saveSessionToFirestore(updatedSession).catch((err) =>
+      saveSessionToFirestore(draftSession).catch((err) =>
         console.error('Firestore session sync error:', err)
       );
 
-      // Mirror to backend API
       fetch('/api/sessions/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -308,10 +393,17 @@ export default function App() {
     if (!target) return;
 
     const now = new Date().toISOString();
+    const variantQs = getSessionVariantQuestions(
+      questionsRef.current,
+      sessionId
+    );
+    const activeMods = getActiveModulesForQuestions(variantQs);
+    const firstModule: ModuleId = activeMods[0] || 'rw_1';
+
     const resetSession: StudentSession = {
       ...target,
       status: 'in_progress',
-      currentModule: 'rw_1',
+      currentModule: firstModule,
       currentQuestionIndex: 0,
       viewMode: 'question',
       answers: {},
@@ -325,10 +417,13 @@ export default function App() {
         math_2: MODULE_CONFIGS.math_2.durationSeconds,
       },
       completedModules: [],
+      routing: undefined,
+      routingTheta: undefined,
+      result: undefined,
       startedAt: now,
       updatedAt: now,
       completedAt: undefined,
-      score: calculateSATScore(questionsRef.current, {}),
+      score: calculateSATScore(variantQs, {}, scoringConfigRef.current),
     };
 
     sessionsRef.current = sessionsRef.current.map((s) =>
@@ -355,15 +450,12 @@ export default function App() {
       throw new Error(err);
     }
 
-    const modId = normalized.moduleId;
-    const modHasFs = fsQuestionsRef.current.some((q) => q.moduleId === modId);
-    const currentModQuestions = questionsRef.current
-      .filter((q) => q.moduleId === modId)
-      .sort((a, b) => a.number - b.number);
-
-    const toSave: SATQuestion[] = modHasFs
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const toSave: SATQuestion[] = hasAnyFs
       ? [normalized]
-      : currentModQuestions.map((q) => (q.id === normalized.id ? normalized : q));
+      : questionsRef.current.map((q) =>
+          q.id === normalized.id ? normalized : q
+        );
 
     await applyQuestionChanges(toSave, []);
 
@@ -385,20 +477,22 @@ export default function App() {
     }
 
     const modId = normalized.moduleId;
-    const modHasFs = fsQuestionsRef.current.some((q) => q.moduleId === modId);
-    const currentModQuestions = questionsRef.current
-      .filter((q) => q.moduleId === modId)
+    const groupKey = getModuleVariantKey(modId, normalized.variant);
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const currentGroupQuestions = (hasAnyFs ? fsQuestionsRef.current : questionsRef.current)
+      .filter((q) => getModuleVariantKey(q.moduleId, q.variant) === groupKey)
       .sort((a, b) => a.number - b.number);
 
+    const varPrefix = normalized.variant ? `_${normalized.variant}` : '';
     const created: SATQuestion = {
       ...normalized,
-      id: `${modId}_q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      number: currentModQuestions.length + 1,
+      id: `${modId}${varPrefix}_q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      number: currentGroupQuestions.length + 1,
     };
 
-    const toSave: SATQuestion[] = modHasFs
+    const toSave: SATQuestion[] = hasAnyFs
       ? [created]
-      : [...currentModQuestions, created];
+      : [...questionsRef.current, created];
 
     await applyQuestionChanges(toSave, []);
 
@@ -414,81 +508,225 @@ export default function App() {
     const target = questionsRef.current.find((q) => q.id === questionId);
     if (!target) return;
 
-    const modId = target.moduleId;
-    const remaining = questionsRef.current
-      .filter((q) => q.moduleId === modId && q.id !== questionId)
+    const groupKey = getModuleVariantKey(target.moduleId, target.variant);
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
+
+    const otherQuestions = baseAll.filter(
+      (q) => getModuleVariantKey(q.moduleId, q.variant) !== groupKey
+    );
+    const remainingInGroup = baseAll
+      .filter(
+        (q) =>
+          getModuleVariantKey(q.moduleId, q.variant) === groupKey &&
+          q.id !== questionId
+      )
       .sort((a, b) => a.number - b.number)
       .map((q, idx) => ({
         ...q,
         number: idx + 1,
       }));
 
-    await applyQuestionChanges(remaining, [questionId]);
+    const toSave = hasAnyFs
+      ? remainingInGroup
+      : [...otherQuestions, ...remainingInGroup];
+
+    await applyQuestionChanges(toSave, [questionId]);
 
     setFsQuestions((prev) => {
       const filtered = prev.filter((q) => q.id !== questionId);
       const map = new Map<string, SATQuestion>();
       for (const q of filtered) map.set(q.id, q);
-      for (const q of remaining) map.set(q.id, q);
+      for (const q of toSave) map.set(q.id, q);
       return Array.from(map.values());
     });
   };
 
   const handleImportQuestions = async (
-    items: Omit<SATQuestion, 'id' | 'number'>[]
+    items: Omit<SATQuestion, 'id' | 'number'>[],
+    mode: 'replace_all' | 'append' = 'replace_all'
   ) => {
     if (items.length === 0) return;
 
-    const byModule = new Map<ModuleId, Omit<SATQuestion, 'id' | 'number'>[]>();
+    // Group by (moduleId, variant) pair so importing e.g. rw_2/hard does not delete rw_2/easy
+    const byGroup = new Map<string, Omit<SATQuestion, 'id' | 'number'>[]>();
     for (const item of items) {
       const normalized = normalizeQuestionInput(item);
       const err = validateQuestionInput(normalized);
       if (err) {
         throw new Error(err);
       }
-      const list = byModule.get(normalized.moduleId) || [];
+      const gKey = getModuleVariantKey(normalized.moduleId, normalized.variant);
+      const list = byGroup.get(gKey) || [];
       list.push(normalized);
-      byModule.set(normalized.moduleId, list);
+      byGroup.set(gKey, list);
     }
 
     const toSave: SATQuestion[] = [];
     const removeIds: string[] = [];
 
-    for (const [modId, modItems] of byModule.entries()) {
-      const existingModIds = new Set<string>();
-      for (const q of fsQuestionsRef.current) {
-        if (q.moduleId === modId) existingModIds.add(q.id);
-      }
-      for (const q of questionsRef.current) {
-        if (q.moduleId === modId) existingModIds.add(q.id);
-      }
+    if (mode === 'replace_all') {
+      const existingInImportedGroups = fsQuestionsRef.current.filter((q) =>
+        byGroup.has(getModuleVariantKey(q.moduleId, q.variant))
+      );
 
       const newSavedIds = new Set<string>();
-      modItems.forEach((item, idx) => {
-        const num = idx + 1;
-        const id = `${modId}_q${num}`;
-        newSavedIds.add(id);
-        toSave.push({
-          ...item,
-          id,
-          number: num,
+      for (const [gKey, groupItems] of byGroup.entries()) {
+        const safePrefix = gKey.replace(':', '_');
+        groupItems.forEach((item, idx) => {
+          const num = idx + 1;
+          const id = `${safePrefix}_q${num}`;
+          newSavedIds.add(id);
+          toSave.push({
+            ...item,
+            id,
+            number: num,
+          });
         });
-      });
+      }
 
-      for (const oldId of existingModIds) {
-        if (!newSavedIds.has(oldId)) {
-          removeIds.push(oldId);
+      for (const oldQ of existingInImportedGroups) {
+        if (!newSavedIds.has(oldQ.id)) {
+          removeIds.push(oldQ.id);
         }
       }
+
+      await applyQuestionChanges(toSave, removeIds);
+      setFsQuestions((prev) => {
+        const map = new Map<string, SATQuestion>();
+        for (const q of prev) {
+          if (!byGroup.has(getModuleVariantKey(q.moduleId, q.variant))) {
+            map.set(q.id, q);
+          }
+        }
+        for (const q of toSave) {
+          map.set(q.id, q);
+        }
+        return Array.from(map.values());
+      });
+    } else {
+      const baseExisting = fsQuestionsRef.current;
+      const stamp = Date.now();
+      for (const [gKey, groupItems] of byGroup.entries()) {
+        const safePrefix = gKey.replace(':', '_');
+        const existingCount = baseExisting.filter(
+          (q) => getModuleVariantKey(q.moduleId, q.variant) === gKey
+        ).length;
+        groupItems.forEach((item, idx) => {
+          const num = existingCount + idx + 1;
+          const randSuffix = Math.random().toString(36).slice(2, 6);
+          const id = `${safePrefix}_q_${stamp}_${idx + 1}_${randSuffix}`;
+          toSave.push({
+            ...item,
+            id,
+            number: num,
+          });
+        });
+      }
+
+      await applyQuestionChanges(toSave, []);
+      setFsQuestions((prev) => {
+        const map = new Map<string, SATQuestion>();
+        for (const q of prev) map.set(q.id, q);
+        for (const q of toSave) map.set(q.id, q);
+        return Array.from(map.values());
+      });
+    }
+  };
+
+  const handleSaveScoringConfig = async (
+    nextConfigInput: Omit<ScoringConfig, 'version' | 'updatedAt'>
+  ) => {
+    const nextCfg: ScoringConfig = {
+      ...nextConfigInput,
+      version: (scoringConfigRef.current.version || 1) + 1,
+      updatedAt: Date.now(),
+    };
+    await saveScoringConfig(nextCfg);
+    setScoringConfig(nextCfg);
+  };
+
+  const handleRecalculateAllSessions = async (): Promise<{
+    updatedCount: number;
+  }> => {
+    const cfg = scoringConfigRef.current;
+    const allQs = questionsRef.current;
+    const currentSessions = sessionsRef.current;
+
+    const updatedSessions: StudentSession[] = [];
+    const nextAllSessions = currentSessions.map((s) => {
+      const variantQs = getSessionVariantQuestions(allQs, s.id);
+      const nextScore = calculateSATScore(
+        variantQs,
+        s.answers || {},
+        cfg,
+        s.routing
+      );
+      const nextResult = scoreSession(s, variantQs, cfg);
+      const updated: StudentSession = {
+        ...s,
+        score: nextScore,
+        result: nextResult,
+        updatedAt: new Date().toISOString(),
+      };
+      updatedSessions.push(updated);
+      return updated;
+    });
+
+    if (updatedSessions.length > 0) {
+      await saveBatchSessionsToFirestore(updatedSessions);
+      sessionsRef.current = nextAllSessions;
+      setSessions(nextAllSessions);
     }
 
-    await applyQuestionChanges(toSave, removeIds);
+    return { updatedCount: updatedSessions.length };
+  };
 
-    const importedModules = new Set(byModule.keys());
+  const handleImportItemParams = async (
+    items: CalibratedItemParamInput[]
+  ): Promise<{ updatedCount: number; skippedIds: string[] }> => {
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const baseQuestions = hasAnyFs
+      ? fsQuestionsRef.current
+      : questionsRef.current;
+
+    if (!hasAnyFs) {
+      await applyQuestionChanges(baseQuestions, []);
+    }
+
+    const res = await saveItemParams(items, baseQuestions);
+
+    const paramMap = new Map<string, CalibratedItemParamInput>();
+    for (const item of items) {
+      paramMap.set(item.id, item);
+    }
+    const nowMs = Date.now();
     setFsQuestions((prev) => {
-      const kept = prev.filter((q) => !importedModules.has(q.moduleId));
-      return [...kept, ...toSave];
+      const source = prev.length > 0 ? prev : baseQuestions;
+      return source.map((q) => {
+        const p = paramMap.get(q.id);
+        if (!p || typeof p.b !== 'number' || !Number.isFinite(p.b)) return q;
+        return {
+          ...q,
+          b: Math.max(-20, Math.min(20, p.b)),
+          bSE: typeof p.bSE === 'number' && Number.isFinite(p.bSE) ? p.bSE : q.bSE,
+          infit:
+            typeof p.infit === 'number' && Number.isFinite(p.infit)
+              ? p.infit
+              : q.infit,
+          outfit:
+            typeof p.outfit === 'number' && Number.isFinite(p.outfit)
+              ? p.outfit
+              : q.outfit,
+          calibratedAt:
+            typeof p.calibratedAt === 'number' && Number.isFinite(p.calibratedAt)
+              ? p.calibratedAt
+              : nowMs,
+        };
+      });
     });
+
+    return res;
   };
 
   if (role === 'admin') {
@@ -497,12 +735,16 @@ export default function App() {
         adminName={adminName}
         sessions={sessions}
         questions={questions}
+        scoringConfig={scoringConfig}
         onDeleteSession={handleDeleteSession}
         onResetSession={handleResetSession}
         onUpdateQuestion={handleUpdateQuestion}
         onAddQuestion={handleAddQuestion}
         onDeleteQuestion={handleDeleteQuestion}
         onImportQuestions={handleImportQuestions}
+        onSaveScoringConfig={handleSaveScoringConfig}
+        onRecalculateAllSessions={handleRecalculateAllSessions}
+        onImportItemParams={handleImportItemParams}
         onLogout={() => {
           setRole('guest');
           setActiveSessionId(null);
@@ -516,7 +758,8 @@ export default function App() {
       return (
         <StudentResultView
           session={activeSession}
-          questions={questions}
+          questions={activeVariantQuestions}
+          scoringConfig={scoringConfig}
           onRestartExam={() => handleResetSession(activeSession.id)}
           onReturnToExam={
             activeSession.status !== 'completed'
@@ -535,7 +778,8 @@ export default function App() {
     return (
       <BluebookExamView
         session={activeSession}
-        questions={questions}
+        questions={activeVariantQuestions}
+        scoringConfig={scoringConfig}
         onSyncSession={handleSyncSession}
         onExitExam={() => setViewingResultEarly(true)}
       />

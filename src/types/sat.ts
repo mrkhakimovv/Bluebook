@@ -2,7 +2,11 @@ export type QuestionType = 'mcq' | 'spr';
 
 export type QuestionDifficulty = 'easy' | 'medium' | 'hard';
 
+export type QuestionVariant = 'easy' | 'hard';
+
 export type ModuleId = 'rw_1' | 'rw_2' | 'math_1' | 'math_2';
+
+export type SectionId = 'rw' | 'math';
 
 export const RW_DOMAINS = [
   'Craft and Structure',
@@ -30,6 +34,8 @@ export interface ModuleConfig {
   shortTitle: string;
   durationSeconds: number;
   questionCount: number;
+  scoredCount: number;
+  pretestCount: number;
   directions: string;
 }
 
@@ -52,6 +58,13 @@ export interface SATQuestion {
   domain?: string;
   skill?: string;
   difficulty?: QuestionDifficulty;
+  variant?: QuestionVariant; // faqat rw_2 / math_2 uchun; bo'lmasa umumiy
+  scored?: boolean; // bo'lmasa true (true = hisoblanadi, false = sinov/pretest)
+  b?: number;
+  bSE?: number;
+  infit?: number;
+  outfit?: number;
+  calibratedAt?: number;
 }
 
 export interface HighlightAnnotation {
@@ -83,6 +96,73 @@ export interface SATScoreReport {
   moduleScores: Record<ModuleId, ModuleScoreBreakdown>;
 }
 
+export interface DomainBreakdown {
+  correct: number;
+  total: number;
+}
+
+export interface SectionResult {
+  theta: number;
+  se: number;
+  rawScored: number;
+  nScored: number;
+  score: number;
+  extreme: 'none' | 'zero' | 'perfect';
+  domains: Record<string, DomainBreakdown>;
+}
+
+export interface SessionResult {
+  rw: SectionResult;
+  math: SectionResult;
+  total: number;
+  scoringVersion: number;
+  computedAt: number;
+}
+
+export interface SessionRouting {
+  rw?: QuestionVariant;
+  math?: QuestionVariant;
+}
+
+export interface SessionRoutingTheta {
+  rw?: number;
+  math?: number;
+}
+
+export interface ScoringConfig {
+  version: number;
+  A_rw: number;
+  B_rw: number;
+  A_math: number;
+  B_math: number;
+  cutRW: number;
+  cutMath: number;
+  provisionalB: {
+    easy: number;
+    medium: number;
+    hard: number;
+  };
+  extremeAdjust: number;
+  updatedAt: number;
+}
+
+export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
+  version: 1,
+  A_rw: 100,
+  B_rw: 500,
+  A_math: 100,
+  B_math: 500,
+  cutRW: 0,
+  cutMath: 0,
+  provisionalB: {
+    easy: -1,
+    medium: 0,
+    hard: 1,
+  },
+  extremeAdjust: 0.3,
+  updatedAt: 0,
+};
+
 export interface StudentSession {
   id: string;
   fullName: string;
@@ -101,6 +181,9 @@ export interface StudentSession {
   updatedAt: string;
   completedAt?: string;
   score: SATScoreReport;
+  routing?: SessionRouting;
+  routingTheta?: SessionRoutingTheta;
+  result?: SessionResult;
 }
 
 export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
@@ -112,6 +195,8 @@ export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
     shortTitle: 'Reading & Writing M1',
     durationSeconds: 32 * 60,
     questionCount: 27,
+    scoredCount: 25,
+    pretestCount: 2,
     directions:
       'The questions in this section address a number of important reading and writing skills. Each question includes one or more passages, which may include a table or graph. Read each passage and question carefully, and then choose the best answer to the question based on the passage(s). All questions in this section are multiple-choice with four answer choices. Each question has a single best answer.',
   },
@@ -123,6 +208,8 @@ export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
     shortTitle: 'Reading & Writing M2',
     durationSeconds: 32 * 60,
     questionCount: 27,
+    scoredCount: 25,
+    pretestCount: 2,
     directions:
       'The questions in this section address a number of important reading and writing skills. Each question includes one or more passages, which may include a table or graph. Read each passage and question carefully, and then choose the best answer to the question based on the passage(s). All questions in this section are multiple-choice with four answer choices. Each question has a single best answer.',
   },
@@ -132,8 +219,10 @@ export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
     moduleNumber: 1,
     title: 'Section 2, Module 1: Math',
     shortTitle: 'Math M1',
-    durationSeconds: 32 * 60,
+    durationSeconds: 35 * 60,
     questionCount: 22,
+    scoredCount: 20,
+    pretestCount: 2,
     directions:
       'The questions in this section address a number of important math skills. Use of an approved calculator is permitted for all questions. Unless otherwise indicated: all variables and expressions represent real numbers; figures provided are drawn to scale; all figures lie in a plane; and the domain of a given function f is the set of all real numbers x for which f(x) is a real number.',
   },
@@ -143,8 +232,10 @@ export const MODULE_CONFIGS: Record<ModuleId, ModuleConfig> = {
     moduleNumber: 2,
     title: 'Section 2, Module 2: Math',
     shortTitle: 'Math M2',
-    durationSeconds: 32 * 60,
+    durationSeconds: 35 * 60,
     questionCount: 22,
+    scoredCount: 20,
+    pretestCount: 2,
     directions:
       'The questions in this section address a number of important math skills. Use of an approved calculator is permitted for all questions. Unless otherwise indicated: all variables and expressions represent real numbers; figures provided are drawn to scale; all figures lie in a plane; and the domain of a given function f is the set of all real numbers x for which f(x) is a real number.',
   },

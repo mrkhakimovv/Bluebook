@@ -893,112 +893,162 @@ while (MATH_MOD2_BASE.length < 22) {
 
 export function generateDefaultQuestions(): SATQuestion[] {
   const questions: SATQuestion[] = [];
+  const diffs: ('easy' | 'medium' | 'hard')[] = ['easy', 'medium', 'hard'];
 
+  // RW Module 1: 27 questions (25 scored, 2 pretest at #10 and #22)
   RW_MOD1_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 10 || num === 22;
     questions.push({
       ...q,
-      id: `rw_1_q${idx + 1}`,
+      id: `rw_1_q${num}`,
       moduleId: 'rw_1',
-      number: idx + 1,
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || diffs[idx % 3],
     });
   });
 
+  // RW Module 2 (Easy variant): 27 questions (25 scored, 2 pretest)
   RW_MOD2_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 9 || num === 21;
     questions.push({
       ...q,
-      id: `rw_2_q${idx + 1}`,
+      id: `rw_2_easy_q${num}`,
       moduleId: 'rw_2',
-      number: idx + 1,
+      variant: 'easy',
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || (idx % 3 === 2 ? 'medium' : 'easy'),
     });
   });
 
+  // RW Module 2 (Hard variant): 27 questions (25 scored, 2 pretest)
+  RW_MOD2_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 11 || num === 23;
+    questions.push({
+      ...q,
+      id: `rw_2_hard_q${num}`,
+      moduleId: 'rw_2',
+      variant: 'hard',
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || (idx % 3 === 0 ? 'medium' : 'hard'),
+    });
+  });
+
+  // Math Module 1: 22 questions (20 scored, 2 pretest at #8 and #19)
   MATH_MOD1_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 8 || num === 19;
     questions.push({
       ...q,
-      id: `math_1_q${idx + 1}`,
+      id: `math_1_q${num}`,
       moduleId: 'math_1',
-      number: idx + 1,
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || diffs[idx % 3],
     });
   });
 
+  // Math Module 2 (Easy variant): 22 questions (20 scored, 2 pretest)
   MATH_MOD2_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 7 || num === 18;
     questions.push({
       ...q,
-      id: `math_2_q${idx + 1}`,
+      id: `math_2_easy_q${num}`,
       moduleId: 'math_2',
-      number: idx + 1,
+      variant: 'easy',
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || (idx % 3 === 2 ? 'medium' : 'easy'),
+    });
+  });
+
+  // Math Module 2 (Hard variant): 22 questions (20 scored, 2 pretest)
+  MATH_MOD2_BASE.forEach((q, idx) => {
+    const num = idx + 1;
+    const isPretest = num === 9 || num === 20;
+    questions.push({
+      ...q,
+      id: `math_2_hard_q${num}`,
+      moduleId: 'math_2',
+      variant: 'hard',
+      number: num,
+      scored: !isPretest,
+      difficulty: q.difficulty || (idx % 3 === 0 ? 'medium' : 'hard'),
     });
   });
 
   return questions;
 }
 
-export function normalizeSprAnswer(val: string): number | string {
-  const trimmed = (val || '').trim();
-  if (!trimmed) return '';
-  if (trimmed.includes('/')) {
-    const parts = trimmed.split('/');
-    if (parts.length === 2) {
-      const num = Number(parts[0]);
-      const den = Number(parts[1]);
-      if (!isNaN(num) && !isNaN(den) && den !== 0) {
-        return Math.round((num / den) * 10000) / 10000;
-      }
-    }
-  }
-  const parsed = Number(trimmed);
-  if (!isNaN(parsed)) {
-    return Math.round(parsed * 10000) / 10000;
-  }
-  return trimmed.toLowerCase();
-}
-
-export function isAnswerCorrect(question: SATQuestion, userAnswer?: string): boolean {
-  if (!userAnswer || !userAnswer.trim()) return false;
-  if (question.type === 'mcq') {
-    return userAnswer.trim().toUpperCase() === question.correctAnswer.trim().toUpperCase();
-  }
-  // Student-Produced Response (supports fractions/decimals/multiple accepted values separated by comma)
-  const acceptedList = question.correctAnswer.split(',').map((s) => s.trim());
-  const normUser = normalizeSprAnswer(userAnswer);
-  return acceptedList.some((acc) => normalizeSprAnswer(acc) === normUser);
-}
+export { normalizeSprAnswer, isAnswerCorrect } from '../lib/scoring/rasch';
+import {
+  isAnswerCorrect as checkCorrect,
+  scoreSession,
+  getModuleQuestionsForSession,
+} from '../lib/scoring/rasch';
+import {
+  DEFAULT_SCORING_CONFIG,
+  ScoringConfig,
+  SessionRouting,
+} from '../types/sat';
 
 export function calculateSATScore(
   questions: SATQuestion[],
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  scoringConfig: ScoringConfig = DEFAULT_SCORING_CONFIG,
+  routing?: SessionRouting
 ): SATScoreReport {
-  const moduleScores: Record<ModuleId, { correct: number; total: number; answered: number }> = {
+  const raschResult = scoreSession(
+    { answers: answers || {}, routing },
+    questions,
+    scoringConfig
+  );
+
+  const effectiveRouting: SessionRouting = {
+    rw: routing?.rw,
+    math: routing?.math,
+  };
+
+  const moduleScores: Record<
+    ModuleId,
+    { correct: number; total: number; answered: number }
+  > = {
     rw_1: { correct: 0, total: 0, answered: 0 },
     rw_2: { correct: 0, total: 0, answered: 0 },
     math_1: { correct: 0, total: 0, answered: 0 },
     math_2: { correct: 0, total: 0, answered: 0 },
   };
 
-  for (const q of questions) {
-    const bucket = moduleScores[q.moduleId];
-    if (!bucket) continue;
-    bucket.total += 1;
-    const ans = answers[q.id];
-    if (ans && ans.trim() !== '') {
-      bucket.answered += 1;
-      if (isAnswerCorrect(q, ans)) {
-        bucket.correct += 1;
+  for (const modId of MODULE_ORDER) {
+    const modQs = getModuleQuestionsForSession(
+      questions,
+      modId,
+      effectiveRouting
+    );
+    const bucket = moduleScores[modId];
+    for (const q of modQs) {
+      if (q.scored === false) continue;
+      bucket.total += 1;
+      const ans = answers[q.id];
+      if (ans && ans.trim() !== '') {
+        bucket.answered += 1;
+        if (checkCorrect(q, ans)) {
+          bucket.correct += 1;
+        }
       }
     }
   }
 
-  const rwRaw = moduleScores.rw_1.correct + moduleScores.rw_2.correct;
-  const rwTotal = moduleScores.rw_1.total + moduleScores.rw_2.total || 54;
-  const mathRaw = moduleScores.math_1.correct + moduleScores.math_2.correct;
-  const mathTotal = moduleScores.math_1.total + moduleScores.math_2.total || 44;
-
-  // College Board Digital SAT 200-800 scaled score calculation rounded to nearest 10
-  const rwRatio = rwTotal > 0 ? rwRaw / rwTotal : 0;
-  const mathRatio = mathTotal > 0 ? mathRaw / mathTotal : 0;
-
-  const rwScaled = rwRaw === 0 ? 200 : Math.min(800, Math.max(200, Math.round((200 + rwRatio * 600) / 10) * 10));
-  const mathScaled = mathRaw === 0 ? 200 : Math.min(800, Math.max(200, Math.round((200 + mathRatio * 600) / 10) * 10));
+  const rwRaw = raschResult.rw.rawScored;
+  const rwTotal = raschResult.rw.nScored;
+  const mathRaw = raschResult.math.rawScored;
+  const mathTotal = raschResult.math.nScored;
 
   const totalAnswered =
     moduleScores.rw_1.answered +
@@ -1007,12 +1057,13 @@ export function calculateSATScore(
     moduleScores.math_2.answered;
   const totalQuestions = rwTotal + mathTotal;
   const totalCorrect = rwRaw + mathRaw;
-  const accuracyPercent = totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
+  const accuracyPercent =
+    totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
 
   return {
-    total: rwScaled + mathScaled,
-    rwScaled,
-    mathScaled,
+    total: raschResult.total,
+    rwScaled: raschResult.rw.score,
+    mathScaled: raschResult.math.score,
     rwRaw,
     rwTotal,
     mathRaw,
@@ -1023,3 +1074,4 @@ export function calculateSATScore(
     moduleScores,
   };
 }
+

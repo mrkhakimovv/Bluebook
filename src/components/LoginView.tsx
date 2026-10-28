@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { BookOpen, Lock, User, ArrowRight, Calculator, Clock, CheckCircle2 } from 'lucide-react';
+import {
+  BookOpen,
+  Lock,
+  User,
+  ArrowRight,
+  Calculator,
+  Clock,
+  CheckCircle2,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 
 interface LoginViewProps {
   onLogin: (fullName: string, password: string, forceNew?: boolean) => Promise<void>;
@@ -12,9 +22,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
   const [password, setPassword] = useState('');
   const [forceNew, setForceNew] = useState(false);
 
+  // Admin Code Modal State
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminCode, setAdminCode] = useState('');
+  const [adminModalError, setAdminModalError] = useState<string | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await onLogin(fullName, password, forceNew);
+  };
+
+  const handleAdminSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCode = adminCode.trim();
+    if (!cleanCode) {
+      setAdminModalError('Iltimos, admin kodini kiriting.');
+      return;
+    }
+    if (cleanCode !== '7788') {
+      setAdminModalError('Maxfiy kod noto‘g‘ri! Qaytadan tekshirib kiriting.');
+      return;
+    }
+    setAdminModalError(null);
+    await onLogin('Administrator', cleanCode);
   };
 
   return (
@@ -37,7 +67,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center px-6 py-12">
+      <main className="flex-1 flex items-center justify-center px-6 py-10">
         <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
           {/* Left Column: Exam Info */}
           <div className="lg:col-span-7 flex flex-col justify-center space-y-6 pr-0 lg:pr-6">
@@ -96,8 +126,23 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
             </div>
           </div>
 
-          {/* Right Column: Login Card */}
+          {/* Right Column: Admin Button + Login Card */}
           <div className="lg:col-span-5 flex flex-col justify-center">
+            <div className="flex justify-end mb-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminCode('');
+                  setAdminModalError(null);
+                  setIsAdminModalOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:border-[#1b4332] hover:bg-slate-50 text-xs font-bold text-slate-800 shadow-xs flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4 text-[#1b4332]" />
+                <span>Admin sifatida kirish</span>
+              </button>
+            </div>
+
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 space-y-6">
               <div className="space-y-1.5">
                 <h2 className="text-xl font-bold text-slate-900">Tizimga kirish</h2>
@@ -179,13 +224,86 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
                   • O‘quvchilar: Ism-familiya va o‘z parolingizni yozib kiring (agar avval kirgan bo‘lsangiz, kelgan joyingizdan davom etadi).
                 </p>
                 <p>
-                  • Admin: Parol qismiga maxsus kodni kiritsangiz, real vaqtda natijalar va savollar bazasi boshqaruviga o‘tasiz.
+                  • Admin: Yuqoridagi «Admin sifatida kirish» tugmasi orqali maxsus kodni kiritib boshqaruv paneliga o‘ting.
                 </p>
               </div>
             </div>
           </div>
         </div>
       </main>
+
+      {/* Modal: Admin Code Prompt */}
+      {isAdminModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-[#1b4332]" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Admin sifatida kirish
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAdminModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAdminSubmit} className="p-6 space-y-4">
+              <p className="text-xs text-slate-600">
+                Admin boshqaruv paneliga o‘tish uchun maxsus kirish kodini kiriting:
+              </p>
+
+              {adminModalError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+                  {adminModalError}
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Maxsus kod
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="password"
+                    autoFocus
+                    value={adminCode}
+                    onChange={(e) => {
+                      setAdminCode(e.target.value);
+                      setAdminModalError(null);
+                    }}
+                    placeholder="Kodni kiriting..."
+                    className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:border-[#1b4332] focus:ring-2 focus:ring-[#1b4332]/15 focus:outline-none text-slate-900 font-mono tracking-widest"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAdminModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-5 py-2 rounded-xl bg-[#1b4332] hover:bg-[#143325] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>Kirish</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="px-8 py-4 border-t border-slate-200 bg-white flex items-center justify-between text-xs text-slate-500">

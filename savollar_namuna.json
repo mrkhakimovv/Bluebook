@@ -1,47 +1,121 @@
-{
-  "questions": [
-    {
-      "moduleId": "rw_2",
-      "type": "mcq",
-      "domain": "Craft and Structure",
-      "skill": "Words in Context",
-      "difficulty": "medium",
-      "passage": "While researching marine bioluminescence, biologist Edith Widder noticed that traditional submersibles with bright lights and noisy thrusters often ______ deep-sea organisms, causing them to flee before scientists could observe their natural behaviors.",
-      "prompt": "Which choice completes the text with the most logical and precise word or phrase?",
-      "options": {
-        "A": "startled",
-        "B": "cultivated",
-        "C": "authenticated",
-        "D": "replenished"
-      },
-      "correctAnswer": "A",
-      "explanation": "Bright lights and noisy thrusters would frighten or 'startle' deep-sea organisms, causing them to flee."
+[
+  {
+    "moduleId": "rw_1",
+    "scored": true,
+    "difficulty": "easy",
+    "domain": "Craft and Structure",
+    "skill": "Words in Context",
+    "passage": "While researching marine bioluminescence, biologist Edith Widder noticed that traditional submersibles with bright lights and noisy thrusters often ______ deep-sea organisms, causing them to flee before scientists could observe their natural behaviors.",
+    "prompt": "Which choice completes the text with the most logical and precise word or phrase?",
+    "options": {
+      "A": "startled",
+      "B": "cultivated",
+      "C": "authenticated",
+      "D": "replenished"
     },
-    {
-      "moduleId": "math_2",
-      "type": "mcq",
-      "domain": "Advanced Math",
-      "skill": "Equivalent Expressions",
-      "difficulty": "medium",
-      "prompt": "Which expression is equivalent to $\\frac{x^2 - 9}{x + 3}$ for all $x \\neq -3$?",
-      "options": [
-        "x - 3",
-        "x + 3",
-        "x^2 - 3",
-        "x - 9"
-      ],
-      "correctAnswer": "A",
-      "explanation": "Since $x^2 - 9 = (x - 3)(x + 3)$, dividing by $x + 3$ gives $x - 3$."
+    "correctAnswer": "A",
+    "explanation": "Bright lights and noisy thrusters would frighten or 'startle' deep-sea organisms, causing them to flee."
+  },
+  {
+    "moduleId": "rw_1",
+    "scored": false,
+    "difficulty": "medium",
+    "domain": "Information and Ideas",
+    "skill": "Central Ideas and Details",
+    "passage": "Archaeologists studying ancient Mesopotamian clay tablets discovered that many administrative records were recycled by moistening the clay and smoothing the surface for reuse.",
+    "prompt": "According to the text, how did ancient scribes reuse administrative clay tablets?",
+    "options": {
+      "A": "By firing them in high-temperature kilns",
+      "B": "By moistening the clay and smoothing the surface",
+      "C": "By grinding them into powder for pottery",
+      "D": "By coating them with beeswax"
     },
-    {
-      "moduleId": "math_2",
-      "type": "spr",
-      "domain": "Algebra",
-      "skill": "Linear Equations in One Variable",
-      "difficulty": "easy",
-      "prompt": "If $4(2x - 3) = 28$, what is the value of $x$?",
-      "correctAnswer": "5",
-      "explanation": "Dividing both sides by 4 gives $2x - 3 = 7$, so $2x = 10$ and $x = 5$."
-    }
-  ]
-}
+    "correctAnswer": "B",
+    "explanation": "The text states that tablets were recycled by moistening the clay and smoothing the surface."
+  },
+  {
+    "moduleId": "rw_2",
+    "variant": "easy",
+    "scored": true,
+    "difficulty": "easy",
+    "domain": "Standard English Conventions",
+    "skill": "Boundaries",
+    "passage": "The botanical garden's new conservatory features over three hundred species of orchids ______ visitors can observe rare blooms from tropical cloud forests year-round.",
+    "prompt": "Which choice completes the text so that it conforms to the conventions of Standard English?",
+    "options": {
+      "A": "orchids, visitors",
+      "B": "orchids; visitors",
+      "C": "orchids and visitors",
+      "D": "orchids visitors"
+    },
+    "correctAnswer": "B",
+    "explanation": "A semicolon correctly links two closely related independent clauses."
+  },
+  {
+    "moduleId": "rw_2",
+    "variant": "hard",
+    "scored": true,
+    "difficulty": "hard",
+    "domain": "Information and Ideas",
+    "skill": "Inferences",
+    "passage": "Economists have long debated whether patent protections accelerate or hinder follow-on innovation. In a study of 19th-century industrial exhibitions, Petra Moser found that inventors in countries without patent laws focused heavily on industries where secrecy was effective, whereas countries with patent laws saw broader activity in easily reverse-engineered mechanisms.",
+    "prompt": "Which choice most logically completes the conclusion supported by Moser's findings?",
+    "options": {
+      "A": "Patent laws primarily determine the direction of inventive activity across industries rather than the absolute existence of invention.",
+      "B": "Secrecy is universally more effective than patent protection in encouraging industrial innovation.",
+      "C": "Countries without patent laws produced higher-quality mechanical inventions than countries with patent laws.",
+      "D": "Reverse-engineering was impossible in 19th-century manufacturing."
+    },
+    "correctAnswer": "A",
+    "explanation": "Moser's study shows that patent laws shift which industries inventors target (secrecy-friendly vs. easily reverse-engineered) rather than stopping invention altogether."
+  },
+  {
+    "moduleId": "math_1",
+    "scored": true,
+    "difficulty": "medium",
+    "domain": "Algebra",
+    "skill": "Linear functions",
+    "prompt": "For groups of 25 or more people, a museum charges $21 per person for the first 25 people and $14 for each additional person. Which function f gives the total charge, in dollars, for a tour group with n people, where n >= 25?",
+    "options": {
+      "A": "f(n) = 14n + 175",
+      "B": "f(n) = 14n + 525",
+      "C": "f(n) = 35n - 350",
+      "D": "f(n) = 14n + 21"
+    },
+    "correctAnswer": "A",
+    "explanation": "For n >= 25, total charge is 25 * 21 + 14(n - 25) = 525 + 14n - 350 = 14n + 175."
+  },
+  {
+    "moduleId": "math_2",
+    "variant": "easy",
+    "scored": true,
+    "difficulty": "easy",
+    "domain": "Algebra",
+    "skill": "Linear equations in one variable",
+    "prompt": "If $4(2x - 3) = 28$, what is the value of $x$?",
+    "correctAnswer": "5",
+    "explanation": "Dividing both sides by 4 gives $2x - 3 = 7$, so $2x = 10$ and $x = 5$."
+  },
+  {
+    "moduleId": "math_2",
+    "variant": "hard",
+    "scored": true,
+    "difficulty": "hard",
+    "domain": "Advanced Math",
+    "skill": "Nonlinear equations",
+    "prompt": "In the xy-plane, the parabola $y = x^2 - 6x + c$ intersects the line $y = 2x - 7$ at exactly one point. What is the value of $c$?",
+    "correctAnswer": "9",
+    "explanation": "Setting $x^2 - 6x + c = 2x - 7$ gives $x^2 - 8x + (c + 7) = 0$. For one intersection, discriminant $(-8)^2 - 4(1)(c+7) = 0 \\Rightarrow 64 = 4c + 28 \\Rightarrow 4c = 36 \\Rightarrow c = 9$."
+  },
+  {
+    "moduleId": "math_2",
+    "variant": "hard",
+    "scored": false,
+    "difficulty": "hard",
+    "domain": "Geometry and Trigonometry",
+    "skill": "Circles",
+    "prompt": "A circle in the xy-plane has equation $(x - 3)^2 + (y + 4)^2 = 49$. What is the radius of the circle?",
+    "correctAnswer": "7",
+    "explanation": "Since $r^2 = 49$, the radius $r = 7$."
+  }
+]

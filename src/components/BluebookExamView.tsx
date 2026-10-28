@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -27,7 +27,14 @@ import {
   MODULE_ORDER,
   ModuleId,
   HighlightAnnotation,
+  ScoringConfig,
+  DEFAULT_SCORING_CONFIG,
 } from '../types/sat';
+import {
+  getModuleQuestionsForSession,
+  computeStage1Routing,
+} from '../lib/scoring/rasch';
+import { isAnswerCorrect } from '../data/defaultQuestions';
 import { ReferenceModal } from './ReferenceModal';
 import { DesmosModal } from './DesmosModal';
 import { QuestionNavigatorPopover } from './QuestionNavigatorPopover';
@@ -37,6 +44,7 @@ import { renderSATTextWithMath } from '../utils/mathRenderer';
 interface BluebookExamViewProps {
   session: StudentSession;
   questions: SATQuestion[];
+  scoringConfig?: ScoringConfig;
   onSyncSession: (updates: Partial<StudentSession>) => void;
   onExitExam: () => void;
 }
@@ -44,6 +52,7 @@ interface BluebookExamViewProps {
 export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   session,
   questions,
+  scoringConfig = DEFAULT_SCORING_CONFIG,
   onSyncSession,
   onExitExam,
 }) => {
@@ -71,13 +80,51 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   const [activeNoteQuestionId, setActiveNoteQuestionId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
 
-  const currentModuleId = session.currentModule;
+  const activeModuleOrder = MODULE_ORDER.filter((m) =>
+    questions.some((q) => q.moduleId === m)
+  );
+  const effectiveModuleOrder =
+    activeModuleOrder.length > 0 ? activeModuleOrder : MODULE_ORDER;
+
+  const currentModuleId = effectiveModuleOrder.includes(session.currentModule)
+    ? session.currentModule
+    : effectiveModuleOrder[0];
   const moduleConfig = MODULE_CONFIGS[currentModuleId];
   const isMathSection = moduleConfig.sectionNumber === 2;
 
-  const moduleQuestions = questions
-    .filter((q) => q.moduleId === currentModuleId)
-    .sort((a, b) => a.number - b.number);
+  // Compute effective routing if student is already in Module 2
+  const effectiveRouting = useMemo(() => {
+    const r = { ...(session.routing || {}) };
+    if (!r.rw && (currentModuleId === 'rw_2' || session.completedModules.includes('rw_1'))) {
+      r.rw = computeStage1Routing(
+        'rw',
+        questions,
+        session.answers,
+        scoringConfig
+      ).variant;
+    }
+    if (!r.math && (currentModuleId === 'math_2' || session.completedModules.includes('math_1'))) {
+      r.math = computeStage1Routing(
+        'math',
+        questions,
+        session.answers,
+        scoringConfig
+      ).variant;
+    }
+    return r;
+  }, [
+    session.routing,
+    session.answers,
+    session.completedModules,
+    currentModuleId,
+    questions,
+    scoringConfig,
+  ]);
+
+  const moduleQuestions = useMemo(
+    () => getModuleQuestionsForSession(questions, currentModuleId, effectiveRouting),
+    [questions, currentModuleId, effectiveRouting]
+  );
 
   const safeIndex = Math.min(
     Math.max(0, session.currentQuestionIndex),
@@ -95,6 +142,12 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+
+  const scoringConfigRef = useRef(scoringConfig);
+  scoringConfigRef.current = scoringConfig;
+
   const onSyncSessionRef = useRef(onSyncSession);
   onSyncSessionRef.current = onSyncSession;
 
@@ -105,6 +158,95 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     );
   }, [currentModuleId, moduleConfig.durationSeconds]);
 
+  const handleAdvanceModule = () => {
+    const latestSession = sessionRef.current;
+    const latestQuestions = questionsRef.current;
+    const latestConfig = scoringConfigRef.current;
+
+    const currentOrderIdx = effectiveModuleOrder.indexOf(currentModuleId);
+    const completed = Array.from(
+      new Set([...latestSession.completedModules, currentModuleId])
+    );
+
+    // Stage 1 -> Stage 2 adaptive routing (computed & saved ONCE when Module 1 finishes)
+    const nextRouting = { ...(latestSession.routing || {}) };
+    const nextRoutingTheta = { ...(latestSession.routingTheta || {}) };
+
+    if (currentModuleId === 'rw_1' && !nextRouting.rw) {
+      const rwStage1 = computeStage1Routing(
+        'rw',
+        latestQuestions,
+        latestSession.answers,
+        latestConfig
+      );
+      nextRouting.rw = rwStage1.variant;
+      nextRoutingTheta.rw = Number(rwStage1.theta.toFixed(4));
+    }
+
+    if (currentModuleId === 'math_1' && !nextRouting.math) {
+      const mathStage1 = computeStage1Routing(
+        'math',
+        latestQuestions,
+        latestSession.answers,
+        latestConfig
+      );
+      nextRouting.math = mathStage1.variant;
+      nextRoutingTheta.math = Number(mathStage1.theta.toFixed(4));
+    }
+
+    if (
+      currentOrderIdx >= 0 &&
+      currentOrderIdx < effectiveModuleOrder.length - 1
+    ) {
+      const nextMod: ModuleId = effectiveModuleOrder[currentOrderIdx + 1];
+      // Show 10-minute optional break when transitioning from Section 1 (rw_*) to Section 2 (math_*)
+      if (currentModuleId.startsWith('rw_') && nextMod.startsWith('math_')) {
+        onSyncSessionRef.current({
+          status: 'break',
+          currentModule: nextMod,
+          currentQuestionIndex: 0,
+          viewMode: 'question',
+          completedModules: completed,
+          routing: nextRouting,
+          routingTheta: nextRoutingTheta,
+          moduleTimeRemaining: {
+            ...latestSession.moduleTimeRemaining,
+            [currentModuleId]: secondsRef.current,
+          },
+        });
+        return;
+      }
+
+      onSyncSessionRef.current({
+        currentModule: nextMod,
+        currentQuestionIndex: 0,
+        viewMode: 'question',
+        completedModules: completed,
+        routing: nextRouting,
+        routingTheta: nextRoutingTheta,
+        moduleTimeRemaining: {
+          ...latestSession.moduleTimeRemaining,
+          [currentModuleId]: secondsRef.current,
+        },
+      });
+    } else {
+      // Completed all active modules!
+      onSyncSessionRef.current({
+        status: 'completed',
+        completedModules: completed,
+        routing: nextRouting,
+        routingTheta: nextRoutingTheta,
+        moduleTimeRemaining: {
+          ...latestSession.moduleTimeRemaining,
+          [currentModuleId]: secondsRef.current,
+        },
+      });
+    }
+  };
+
+  const handleAdvanceModuleRef = useRef(handleAdvanceModule);
+  handleAdvanceModuleRef.current = handleAdvanceModule;
+
   useEffect(() => {
     if (session.status !== 'in_progress') return;
     const interval = setInterval(() => {
@@ -112,7 +254,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       if (currentVal <= 1) {
         clearInterval(interval);
         setSecondsLeft(0);
-        handleAdvanceModule();
+        handleAdvanceModuleRef.current();
         return;
       }
       const nextVal = currentVal - 1;
@@ -236,51 +378,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     }
   };
 
-  const handleAdvanceModule = () => {
-    const currentOrderIdx = MODULE_ORDER.indexOf(currentModuleId);
-    const completed = Array.from(new Set([...session.completedModules, currentModuleId]));
-
-    if (currentOrderIdx < MODULE_ORDER.length - 1) {
-      const nextMod: ModuleId = MODULE_ORDER[currentOrderIdx + 1];
-      // Show 10-minute optional break between Section 1 (rw_2) and Section 2 (math_1)
-      if (currentModuleId === 'rw_2' && nextMod === 'math_1') {
-        onSyncSession({
-          status: 'break',
-          currentModule: nextMod,
-          currentQuestionIndex: 0,
-          viewMode: 'question',
-          completedModules: completed,
-          moduleTimeRemaining: {
-            ...session.moduleTimeRemaining,
-            [currentModuleId]: secondsRef.current,
-          },
-        });
-        return;
-      }
-
-      onSyncSession({
-        currentModule: nextMod,
-        currentQuestionIndex: 0,
-        viewMode: 'question',
-        completedModules: completed,
-        moduleTimeRemaining: {
-          ...session.moduleTimeRemaining,
-          [currentModuleId]: secondsRef.current,
-        },
-      });
-    } else {
-      // Completed all 4 modules!
-      onSyncSession({
-        status: 'completed',
-        completedModules: completed,
-        moduleTimeRemaining: {
-          ...session.moduleTimeRemaining,
-          [currentModuleId]: secondsRef.current,
-        },
-      });
-    }
-  };
-
   // Handle text selection for Highlights & Notes
   const handleTextMouseUp = () => {
     const sel = window.getSelection();
@@ -373,7 +470,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           </div>
           <div className="bg-slate-900/60 rounded-xl p-4 text-xs text-slate-300 space-y-1">
             <div>O‘quvchi: <strong>{session.fullName}</strong></div>
-            <div>Keyingi bosqich: <strong>Section 2, Module 1: Math (22 savol)</strong></div>
+            <div>Keyingi bosqich: <strong>Section 2, Module 1: Math (22 savol, 35 daqiqa)</strong></div>
           </div>
           <button
             onClick={() =>
@@ -407,7 +504,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       }}
       onMouseUp={() => setIsDraggingSplit(false)}
     >
-      {/* 1. Optional Top Blue Fullscreen Banner matching image_045e73c8.png */}
+      {/* 1. Optional Top Blue Fullscreen Banner */}
       {showFullscreenBanner && (
         <div className="bg-[#2563eb] text-white text-xs py-1.5 px-4 flex items-center justify-center gap-3 shrink-0">
           <button onClick={triggerFullscreen} className="flex items-center gap-1.5 hover:underline">
@@ -532,7 +629,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               <span>More</span>
             </button>
 
-            {/* More Dropdown matching image_830a158a.png */}
             {showMoreMenu && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 text-xs text-gray-800">
                 <button
@@ -602,14 +698,17 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           onSelectQuestion={(idx) => handleGoToQuestion(idx)}
           onReturnToQuestions={() => handleGoToQuestion(safeIndex)}
           onSubmitModule={handleAdvanceModule}
-          isLastModule={currentModuleId === 'math_2'}
+          isLastModule={
+            currentModuleId ===
+            effectiveModuleOrder[effectiveModuleOrder.length - 1]
+          }
         />
       ) : currentQuestion ? (
         <main
           className="flex-1 flex overflow-hidden relative bg-white"
           onMouseUp={handleTextMouseUp}
         >
-          {/* Floating Selection Highlighter Toolbar matching image_ce017c56.png */}
+          {/* Floating Selection Highlighter Toolbar */}
           {selectionPopup && (
             <div
               style={{
@@ -709,7 +808,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                 )}
               </div>
 
-              {/* Center Resizable Divider with < > Pill matching image_045e73c8.png */}
+              {/* Center Resizable Divider */}
               <div
                 onMouseDown={() => setIsDraggingSplit(true)}
                 className="w-[3px] bg-gray-300 hover:bg-gray-400 relative cursor-col-resize flex items-center justify-center shrink-0 select-none"
@@ -725,7 +824,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               </div>
             </>
           ) : (
-            /* SINGLE CENTERED COLUMN (Math matching image_c4c0b9d4.png, image_f419f845.png, image_2e1e9e8b.png) */
+            /* SINGLE CENTERED COLUMN (Math) */
             <div className="flex-1 h-full overflow-y-auto px-6 py-5">
               <div className="max-w-[780px] mx-auto w-full">
                 {renderQuestionRightContent()}
@@ -738,7 +837,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       {/* 4. Bluebook Exam Footer Bar (#e2e8e0) */}
       {session.viewMode !== 'review' && (
         <footer className="bg-[#e2e8e0] border-t border-dashed border-gray-400 px-6 py-2.5 flex items-center justify-between shrink-0">
-          {/* Left: Student Full Name matching 'sdcadc' in screenshots */}
+          {/* Left: Student Full Name */}
           <div className="text-sm font-bold text-gray-900 min-w-[160px] truncate">
             {session.fullName}
           </div>
@@ -793,7 +892,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       {/* Desmos Graphing Calculator Modal */}
       <DesmosModal isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
 
-      {/* Sticky Note Modal when student clicks Note icon */}
+      {/* Sticky Note Modal */}
       {activeNoteQuestionId && (
         <div className="fixed bottom-20 right-8 z-50 w-80 bg-amber-50 border border-amber-300 rounded-xl shadow-xl p-4 space-y-2.5">
           <div className="flex items-center justify-between border-b border-amber-200 pb-1.5">
@@ -859,7 +958,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
     return (
       <div className="space-y-5">
-        {/* Question Header Bar (#f0f0f0 with dashed bottom border matching image_438cd193.png) */}
+        {/* Question Header Bar (#f0f0f0 with dashed bottom border) */}
         <div className="bg-[#f0f0f0] border-b-2 border-dashed border-gray-400 px-3.5 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="w-7 h-7 rounded-md bg-[#111111] text-white text-xs font-bold flex items-center justify-center">
@@ -895,9 +994,8 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           )}
         </div>
 
-        {/* Question Body Container matching left indentation in image_438cd193.png */}
+        {/* Question Body Container */}
         <div className="pl-3 pr-1 space-y-5">
-          {/* Centered System of Equations if present (matching image_2e1e9e8b.png) */}
           {currentQuestion.mathEquation && currentQuestion.mathEquation.length > 0 && (
             <div className="py-2 text-center text-[17px] text-[#111111] space-y-2.5">
               {currentQuestion.mathEquation.map((eq, i) => (
@@ -928,7 +1026,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
                 return (
                   <div key={opt.id} className="flex items-center gap-3">
-                    {/* Option Box matching image_438cd193.png */}
                     <button
                       onClick={() => handleSelectOption(opt.id)}
                       className={`flex-1 text-left rounded-lg px-4 py-3 flex items-center gap-3.5 relative transition-all cursor-pointer ${
@@ -937,7 +1034,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                           : 'border border-gray-500 hover:border-gray-800 bg-white'
                       }`}
                     >
-                      {/* Horizontal Cross-Out Line when Eliminated matching image_455d11e4.png */}
                       {isEliminated && (
                         <div className="absolute left-0 right-0 top-1/2 h-[2px] bg-gray-800 z-10 pointer-events-none" />
                       )}
@@ -964,7 +1060,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                       />
                     </button>
 
-                    {/* Right Strikethrough Toggle Button matching image_2e1e9e8b.png */}
                     {eliminatorMode && (
                       <button
                         onClick={() => handleToggleEliminate(opt.id)}
@@ -986,7 +1081,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               })}
             </div>
           ) : (
-            /* Student-Produced Response matching image_f419f845.png */
+            /* Student-Produced Response */
             <div className="space-y-5 pt-2">
               <div className="bg-[#f3f4f6] border border-gray-200 rounded-xl p-5 space-y-1.5 text-gray-800">
                 <h4 className="text-xs font-bold text-gray-900 font-sans">

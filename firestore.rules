@@ -53,14 +53,17 @@ service cloud.firestore {
         'startedAt',
         'updatedAt',
         'completedAt',
-        'score'
+        'score',
+        'routing',
+        'routingTheta',
+        'result'
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
       data.password is string && data.password.size() >= 1 && data.password.size() <= 64 &&
       data.status is string && data.status.size() <= 32 && data.status in ['in_progress', 'break', 'completed'] &&
       data.currentModule is string && data.currentModule.size() <= 16 && data.currentModule in ['rw_1', 'rw_2', 'math_1', 'math_2'] &&
-      data.currentQuestionIndex is number && data.currentQuestionIndex >= 0 && data.currentQuestionIndex <= 100 &&
+      data.currentQuestionIndex is number && data.currentQuestionIndex >= 0 && data.currentQuestionIndex <= 10000 &&
       data.viewMode is string && data.viewMode.size() <= 16 && data.viewMode in ['question', 'review'] &&
       data.answers is map &&
       data.flagged is map &&
@@ -71,7 +74,10 @@ service cloud.firestore {
       data.startedAt is string && data.startedAt.size() <= 64 &&
       data.updatedAt is string && data.updatedAt.size() <= 64 &&
       (!('completedAt' in data) || (data.completedAt is string && data.completedAt.size() <= 64)) &&
-      data.score is map;
+      data.score is map &&
+      (!('routing' in data) || (data.routing is map)) &&
+      (!('routingTheta' in data) || (data.routingTheta is map)) &&
+      (!('result' in data) || (data.result is map));
     }
 
     function isValidQuestion(data) {
@@ -96,11 +102,18 @@ service cloud.firestore {
         'explanation',
         'domain',
         'skill',
-        'difficulty'
+        'difficulty',
+        'variant',
+        'scored',
+        'b',
+        'bSE',
+        'infit',
+        'outfit',
+        'calibratedAt'
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.moduleId is string && data.moduleId.size() <= 16 && data.moduleId in ['rw_1', 'rw_2', 'math_1', 'math_2'] &&
-      data.number is number && data.number >= 1 && data.number <= 100 &&
+      data.number is number && data.number >= 1 && data.number <= 10000 &&
       data.type is string && data.type.size() <= 16 && data.type in ['mcq', 'spr'] &&
       data.prompt is string && data.prompt.size() >= 1 && data.prompt.size() <= 4000 &&
       data.correctAnswer is string && data.correctAnswer.size() >= 1 && data.correctAnswer.size() <= 64 &&
@@ -109,12 +122,62 @@ service cloud.firestore {
       (!('domain' in data) || (data.domain is string && data.domain.size() <= 120)) &&
       (!('skill' in data) || (data.skill is string && data.skill.size() <= 120)) &&
       (!('difficulty' in data) || (data.difficulty is string && data.difficulty.size() <= 16 && data.difficulty in ['easy', 'medium', 'hard'])) &&
+      (!('variant' in data) || (data.variant is string && data.variant.size() <= 16 && data.variant in ['easy', 'hard'])) &&
+      (!('scored' in data) || (data.scored is bool)) &&
+      (!('b' in data) || (data.b is number && data.b >= -20 && data.b <= 20)) &&
+      (!('bSE' in data) || (data.bSE is number && data.bSE >= 0 && data.bSE <= 100)) &&
+      (!('infit' in data) || (data.infit is number && data.infit >= 0 && data.infit <= 100)) &&
+      (!('outfit' in data) || (data.outfit is number && data.outfit >= 0 && data.outfit <= 100)) &&
+      (!('calibratedAt' in data) || (data.calibratedAt is number && data.calibratedAt >= 0)) &&
       (!('options' in data) || (data.options is list && data.options.size() <= 8)) &&
       (!('mathEquation' in data) || (data.mathEquation is list && data.mathEquation.size() <= 10));
     }
 
+    function isValidScoringConfig(data) {
+      return data.keys().hasAll([
+        'version',
+        'A_rw',
+        'B_rw',
+        'A_math',
+        'B_math',
+        'cutRW',
+        'cutMath',
+        'provisionalB',
+        'extremeAdjust',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'version',
+        'A_rw',
+        'B_rw',
+        'A_math',
+        'B_math',
+        'cutRW',
+        'cutMath',
+        'provisionalB',
+        'extremeAdjust',
+        'updatedAt'
+      ]) &&
+      data.version is number && data.version >= 1 &&
+      data.A_rw is number && data.A_rw >= 1 && data.A_rw <= 1000 &&
+      data.B_rw is number && data.B_rw >= 0 && data.B_rw <= 1000 &&
+      data.A_math is number && data.A_math >= 1 && data.A_math <= 1000 &&
+      data.B_math is number && data.B_math >= 0 && data.B_math <= 1000 &&
+      data.cutRW is number && data.cutRW >= -10 && data.cutRW <= 10 &&
+      data.cutMath is number && data.cutMath >= -10 && data.cutMath <= 10 &&
+      data.provisionalB is map &&
+      data.extremeAdjust is number && data.extremeAdjust > 0 && data.extremeAdjust < 0.5 &&
+      data.updatedAt is number && data.updatedAt >= 0;
+    }
+
     match /test/{docId} {
       allow get: if isValidId(docId);
+    }
+
+    match /config/{docId} {
+      allow get: if isValidId(docId);
+      allow create: if isValidId(docId) && isValidScoringConfig(incoming());
+      allow update: if isValidId(docId) && isValidScoringConfig(incoming());
     }
 
     match /sessions/{sessionId} {
@@ -127,7 +190,7 @@ service cloud.firestore {
 
     match /questions/{questionId} {
       allow get: if isValidId(questionId);
-      allow list: if request.query.limit <= 200 && resource.data.type in ['mcq', 'spr'];
+      allow list: if request.query.limit <= 1000 && resource.data.type in ['mcq', 'spr'];
       allow create: if isValidId(questionId) && isValidQuestion(incoming()) && incoming().id == questionId;
       allow update: if isValidId(questionId) && isValidQuestion(incoming()) && incoming().id == existing().id;
       allow delete: if isValidId(questionId);
