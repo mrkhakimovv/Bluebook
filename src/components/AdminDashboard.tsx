@@ -988,15 +988,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col">
       {/* Top Bar following 3-zone contract */}
-      <header className="flex items-center justify-between gap-8 px-8 py-4 bg-white border-b border-slate-200">
-        <div className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
+      <header className="flex flex-wrap items-center justify-between gap-3 sm:gap-8 px-4 sm:px-8 py-3.5 sm:py-4 bg-white border-b border-slate-200">
+        <div className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
           Bluebook SAT Admin Panel
         </div>
 
-        <nav className="flex items-center gap-6 text-sm font-medium text-slate-600">
+        <nav className="flex items-center gap-4 sm:gap-6 text-xs sm:text-sm font-medium text-slate-600 overflow-x-auto max-w-full order-3 md:order-2 w-full md:w-auto pt-1 md:pt-0 border-t md:border-t-0 border-slate-100">
           <button
             onClick={() => setActiveTab('results')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'results'
                 ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
@@ -1006,7 +1006,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('questions')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'questions'
                 ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
@@ -1016,7 +1016,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('scoring')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
+            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
               activeTab === 'scoring'
                 ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
@@ -1027,10 +1027,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </button>
         </nav>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 shrink-0 order-2 md:order-3">
           <button
             onClick={onLogout}
-            className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 sm:px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Chiqish ({adminName})</span>
@@ -1039,7 +1039,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-6 py-8 space-y-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8 space-y-6 sm:space-y-8">
         {activeTab === 'results' ? (
           <>
             {/* 4 KPI Strip */}
@@ -1084,9 +1084,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Filters & Actions Bar */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex items-center gap-3 flex-1">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
                   <div className="relative flex-1 max-w-md">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
@@ -1098,7 +1098,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     />
                   </div>
 
-                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto max-w-full">
                     <button
                       onClick={() => setStatusFilter('all')}
                       className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
@@ -1134,7 +1134,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 <button
                   onClick={handleExportCSV}
-                  className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 whitespace-nowrap cursor-pointer"
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Natijalarni yuklab olish (CSV)</span>
@@ -1313,11 +1313,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           /* Question Bank Management Tab */
           <div className="space-y-5">
             {/* Top-Level Section Switcher: Reading vs Math */}
-            <div className="flex flex-wrap items-center justify-center gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 max-w-xl mx-auto gap-3 sm:gap-4">
               <button
                 type="button"
                 onClick={() => handleSelectSection('rw')}
-                className={`min-w-[240px] px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
+                className={`w-full px-5 sm:px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
                   selectedSection === 'rw'
                     ? 'bg-[#2563eb] text-white border-[#2563eb] shadow-md'
                     : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
@@ -1341,7 +1341,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => handleSelectSection('math')}
-                className={`min-w-[240px] px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
+                className={`w-full px-5 sm:px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
                   selectedSection === 'math'
                     ? 'bg-[#2563eb] text-white border-[#2563eb] shadow-md'
                     : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'

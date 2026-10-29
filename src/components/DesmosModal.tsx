@@ -4,25 +4,51 @@ import { Maximize2, Minimize2, X } from 'lucide-react';
 interface DesmosModalProps {
   isOpen: boolean;
   onClose: () => void;
+  isRotatedLandscape?: boolean;
+  containerWidth?: number;
+  containerHeight?: number;
 }
 
-export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => {
+export const DesmosModal: React.FC<DesmosModalProps> = ({
+  isOpen,
+  onClose,
+  isRotatedLandscape = false,
+  containerWidth,
+  containerHeight,
+}) => {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [position, setPosition] = useState({ x: 36, y: 64 });
+  const [position, setPosition] = useState({ x: 24, y: 48 });
   const [dragging, setDragging] = useState(false);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
 
-  const width = isExpanded ? 720 : 400;
-  const height = isExpanded ? 640 : 580;
+  const effW = containerWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024);
+  const effH = containerHeight || (typeof window !== 'undefined' ? window.innerHeight : 768);
+  const isCompact = effH < 520 || effW < 820;
+
+  const width = Math.min(effW - 16, isExpanded ? (isCompact ? 560 : 720) : isCompact ? 340 : 400);
+  const height = Math.min(effH - 52, isExpanded ? (isCompact ? effH - 56 : 640) : isCompact ? Math.max(260, effH - 64) : 580);
+
+  const mapPointer = (clientX: number, clientY: number) => {
+    if (isRotatedLandscape) {
+      // In +90deg rotated container: local X is screen Y, local Y is (screenWidth - screen X)
+      const screenW = typeof window !== 'undefined' ? window.innerWidth : effH;
+      return {
+        x: clientY,
+        y: screenW - clientX,
+      };
+    }
+    return { x: clientX, y: clientY };
+  };
 
   useEffect(() => {
     if (!dragging) return;
 
     const handleWindowMouseMove = (e: MouseEvent) => {
-      const nextX = e.clientX - dragOffsetRef.current.x;
-      const nextY = e.clientY - dragOffsetRef.current.y;
-      const maxX = Math.max(0, window.innerWidth - 80);
-      const maxY = Math.max(0, window.innerHeight - 48);
+      const pt = mapPointer(e.clientX, e.clientY);
+      const nextX = pt.x - dragOffsetRef.current.x;
+      const nextY = pt.y - dragOffsetRef.current.y;
+      const maxX = Math.max(0, effW - 80);
+      const maxY = Math.max(0, effH - 44);
 
       setPosition({
         x: Math.max(-width + 80, Math.min(maxX, nextX)),
@@ -33,10 +59,11 @@ export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => 
     const handleWindowTouchMove = (e: TouchEvent) => {
       if (e.touches.length === 0) return;
       const touch = e.touches[0];
-      const nextX = touch.clientX - dragOffsetRef.current.x;
-      const nextY = touch.clientY - dragOffsetRef.current.y;
-      const maxX = Math.max(0, window.innerWidth - 80);
-      const maxY = Math.max(0, window.innerHeight - 48);
+      const pt = mapPointer(touch.clientX, touch.clientY);
+      const nextX = pt.x - dragOffsetRef.current.x;
+      const nextY = pt.y - dragOffsetRef.current.y;
+      const maxX = Math.max(0, effW - 80);
+      const maxY = Math.max(0, effH - 44);
 
       setPosition({
         x: Math.max(-width + 80, Math.min(maxX, nextX)),
@@ -59,15 +86,16 @@ export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => 
       window.removeEventListener('touchmove', handleWindowTouchMove);
       window.removeEventListener('touchend', handleStopDrag);
     };
-  }, [dragging, width]);
+  }, [dragging, width, effW, effH, isRotatedLandscape]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     // Do not start drag if clicking a button inside header
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
+    const pt = mapPointer(e.clientX, e.clientY);
     dragOffsetRef.current = {
-      x: e.clientX - position.x,
-      y: e.clientY - position.y,
+      x: pt.x - position.x,
+      y: pt.y - position.y,
     };
     setDragging(true);
   };
@@ -76,9 +104,10 @@ export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => 
     if ((e.target as HTMLElement).closest('button')) return;
     if (e.touches.length === 0) return;
     const touch = e.touches[0];
+    const pt = mapPointer(touch.clientX, touch.clientY);
     dragOffsetRef.current = {
-      x: touch.clientX - position.x,
-      y: touch.clientY - position.y,
+      x: pt.x - position.x,
+      y: pt.y - position.y,
     };
     setDragging(true);
   };
@@ -86,8 +115,8 @@ export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => 
   return (
     <div
       style={{
-        top: `${position.y}px`,
-        left: `${position.x}px`,
+        top: `${Math.min(position.y, Math.max(0, effH - 48))}px`,
+        left: `${Math.min(position.x, Math.max(0, effW - 80))}px`,
         width: `${width}px`,
         height: `${height}px`,
       }}
@@ -99,7 +128,7 @@ export const DesmosModal: React.FC<DesmosModalProps> = ({ isOpen, onClose }) => 
       <div
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
-        className={`flex items-center justify-between px-4 py-2.5 bg-[#1e1e1e] border-b border-[#2e2e2e] text-white ${
+        className={`flex items-center justify-between px-3.5 py-2 bg-[#1e1e1e] border-b border-[#2e2e2e] text-white ${
           dragging ? 'cursor-grabbing' : 'cursor-grab'
         }`}
       >

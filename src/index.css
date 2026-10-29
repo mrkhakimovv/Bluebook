@@ -32,3 +32,15 @@ u {
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
+
+html,
+body {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+}
+
+.touch-scroll-pane {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+

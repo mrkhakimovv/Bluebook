@@ -109,43 +109,43 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Award className="w-6 h-6 text-[#2563eb]" />
+      <header className="bg-white border-b border-slate-200 px-4 sm:px-8 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-3">
+          <Award className="w-6 h-6 text-[#2563eb] shrink-0 mt-0.5 sm:mt-0" />
           <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-lg font-bold text-slate-900">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-base sm:text-lg font-bold text-slate-900">
                 Digital SAT Natijalari — {session.fullName}
               </h1>
               <span className="px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold">
                 Taxminiy ball
               </span>
             </div>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-500 mt-0.5">
               Ushbu natija o‘quv va tayyorgarlik maqsadidagi taxminiy ball hisoblanadi (rasmiy College Board SAT balli emas).
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           {onReturnToExam && session.status !== 'completed' && (
             <button
               onClick={onReturnToExam}
-              className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              className="px-3.5 sm:px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
             >
               Imtihonga qaytish
             </button>
           )}
           <button
             onClick={onRestartExam}
-            className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 sm:px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Qayta topshirish</span>
           </button>
           <button
             onClick={onLogout}
-            className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 sm:px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 flex items-center gap-1.5 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
             <span>Chiqish</span>
@@ -153,21 +153,21 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         </div>
       </header>
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8 space-y-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8 space-y-6 sm:space-y-8">
         {/* Top Score Summary Card */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
           {/* Total Score */}
-          <div className="lg:col-span-5 bg-[#2563eb] text-white rounded-2xl p-7 flex flex-col justify-between">
+          <div className="lg:col-span-5 bg-[#2563eb] text-white rounded-2xl p-5 sm:p-7 flex flex-col justify-between">
             <div className="space-y-1">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <p className="text-xs uppercase tracking-wider text-blue-100 font-semibold">
                   Jami SAT Natijasi (Taxminiy ball)
                 </p>
-                <span className="px-2 py-0.5 rounded bg-white/15 text-[11px] font-semibold text-blue-50">
+                <span className="px-2 py-0.5 rounded bg-white/15 text-[11px] font-semibold text-blue-50 shrink-0">
                   400–1600 shkala
                 </span>
               </div>
-              <div className="text-6xl font-bold tracking-tight tabular-nums pt-2">
+              <div className="text-5xl sm:text-6xl font-bold tracking-tight tabular-nums pt-2">
                 {raschResult.total}
               </div>
               <p className="text-xs text-blue-100 pt-1">
@@ -377,7 +377,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         </div>
 
         {/* Question-by-Question Review */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 space-y-5 sm:space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
             <div>
               <h3 className="text-base font-bold text-slate-900">
@@ -388,7 +388,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto max-w-full">
               {(activeModules.length > 0 ? activeModules : MODULE_ORDER).map((modId) => (
                 <button
                   key={modId}
@@ -414,9 +414,9 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                   key={q.id}
                   className="border border-slate-200 rounded-xl p-4 space-y-2.5 hover:border-slate-300 transition-colors"
                 >
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
                     <div className="flex items-center gap-2.5">
-                      <span className="w-7 h-7 rounded bg-slate-900 text-white text-xs font-bold flex items-center justify-center">
+                      <span className="w-7 h-7 rounded bg-slate-900 text-white text-xs font-bold flex items-center justify-center shrink-0">
                         {q.number}
                       </span>
                       <span className="text-xs text-slate-500 font-medium">
@@ -428,12 +428,12 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                     <div className="flex items-center gap-3 text-xs font-semibold">
                       {correct ? (
                         <span className="flex items-center gap-1 text-emerald-700">
-                          <CheckCircle2 className="w-4 h-4" />
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
                           <span>To‘g‘ri ({userAns})</span>
                         </span>
                       ) : (
                         <span className="flex items-center gap-1 text-red-600">
-                          <XCircle className="w-4 h-4" />
+                          <XCircle className="w-4 h-4 shrink-0" />
                           <span>
                             Sizning javobingiz: {userAns || 'Belgilanmagan'} · To‘g‘ri javob: {q.correctAnswer}
                           </span>

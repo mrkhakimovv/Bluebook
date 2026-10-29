@@ -29,6 +29,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (password.trim() !== '7788') {
+      const orientationApi = (window.screen as Screen & {
+        orientation?: { lock?: (type: string) => Promise<void> };
+      })?.orientation;
+      orientationApi?.lock?.('landscape')?.catch(() => {});
+    }
     await onLogin(fullName, password, forceNew);
   };
 
@@ -50,8 +56,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-between">
       {/* Top Bar */}
-      <header className="flex items-center justify-between gap-8 px-8 py-4 bg-white border-b border-slate-200">
-        <div className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
+      <header className="flex items-center justify-between gap-4 sm:gap-8 px-4 sm:px-8 py-3.5 sm:py-4 bg-white border-b border-slate-200">
+        <div className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
           Bluebook Digital SAT
         </div>
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
@@ -60,30 +66,30 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
           <span className="whitespace-nowrap shrink-0">Scale: 400–1600</span>
         </nav>
         <div className="flex items-center gap-3 shrink-0">
-          <span className="text-xs font-medium text-slate-500 whitespace-nowrap">
+          <span className="text-[11px] sm:text-xs font-medium text-slate-500 whitespace-nowrap">
             Real-Time Scoring System
           </span>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center px-6 py-10">
-        <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
+      <main className="flex-1 flex items-center justify-center px-4 sm:px-6 py-6 sm:py-10">
+        <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-stretch">
           {/* Left Column: Exam Info */}
-          <div className="lg:col-span-7 flex flex-col justify-center space-y-6 pr-0 lg:pr-6">
-            <div className="space-y-3">
+          <div className="lg:col-span-7 flex flex-col justify-center space-y-5 sm:space-y-6 pr-0 lg:pr-6 order-2 lg:order-1">
+            <div className="space-y-2.5 sm:space-y-3">
               <p className="text-xs font-semibold tracking-wider text-[#2563eb] uppercase">
                 Digital SAT Practice & Assessment
               </p>
-              <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight leading-tight">
+              <h1 className="text-2xl sm:text-4xl font-bold text-slate-900 tracking-tight leading-tight">
                 Official Bluebook-Style Digital SAT Imtihon Platformasi
               </h1>
-              <p className="text-base text-slate-600 leading-relaxed">
+              <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
                 Haqiqiy SAT imtihoni formatidagi 4 ta modul, Desmos grafik kalkulyatori, geometrik formulalar oynasi, matn belgilash (Highlights & Notes) va real vaqtda 400–1600 ballik шкаla bo‘yicha avtomatik hisoblash tizimi.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4 pt-1 sm:pt-2">
               <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-1.5">
                 <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
                   <BookOpen className="w-4 h-4 text-[#2563eb]" />
@@ -100,7 +106,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
                   <span>Section 2: Mathematics</span>
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Module 1 (22 savol, 32 daqiqa) va Module 2 (22 savol, 32 daqiqa). Variantli (A-D) hamda yozma (Student-produced response) savollar.
+                  Module 1 (22 savol, 35 daqiqa) va Module 2 (22 savol, 35 daqiqa). Variantli (A-D) hamda yozma (Student-produced response) savollar.
                 </p>
               </div>
 
@@ -127,7 +133,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
           </div>
 
           {/* Right Column: Admin Button + Login Card */}
-          <div className="lg:col-span-5 flex flex-col justify-center">
+          <div className="lg:col-span-5 flex flex-col justify-center order-1 lg:order-2">
             <div className="flex justify-end mb-3">
               <button
                 type="button"
@@ -143,7 +149,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin, loading, error })
               </button>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 space-y-6">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-8 space-y-5 sm:space-y-6">
               <div className="space-y-1.5">
                 <h2 className="text-xl font-bold text-slate-900">Tizimga kirish</h2>
                 <p className="text-xs text-slate-500">

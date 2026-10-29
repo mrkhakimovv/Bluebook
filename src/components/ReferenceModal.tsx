@@ -10,13 +10,13 @@ export const ReferenceModal: React.FC<ReferenceModalProps> = ({ isOpen, onClose 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto border border-gray-200 animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[88%] overflow-y-auto border border-gray-200 animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="flex items-center justify-between px-7 py-5 border-b border-gray-100">
+        <div className="flex items-center justify-between px-4 sm:px-7 py-3 sm:py-5 border-b border-gray-100 sticky top-0 bg-white z-10">
           <div className="flex items-center gap-2.5">
             <BookOpen className="w-5 h-5 text-[#1e3a5f]" />
-            <h2 className="text-xl font-bold text-gray-900 tracking-tight">Reference Sheet</h2>
+            <h2 className="text-base sm:text-xl font-bold text-gray-900 tracking-tight">Reference Sheet</h2>
           </div>
           <button
             onClick={onClose}
@@ -28,9 +28,9 @@ export const ReferenceModal: React.FC<ReferenceModalProps> = ({ isOpen, onClose 
         </div>
 
         {/* Body */}
-        <div className="p-7 space-y-5">
+        <div className="p-4 sm:p-7 space-y-4 sm:space-y-5">
           {/* Row 1: 6 2D Geometry Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3.5">
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2.5 sm:gap-3.5">
             {/* 1. Circle */}
             <div className="border border-gray-200 rounded-xl p-3.5 flex flex-col items-center justify-between min-h-[160px] bg-white">
               <svg viewBox="0 0 100 90" className="w-24 h-20">

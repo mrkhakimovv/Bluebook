@@ -28,14 +28,14 @@ export const QuestionNavigatorPopover: React.FC<QuestionNavigatorPopoverProps> =
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center pb-16 bg-black/10" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-end justify-center pb-12 sm:pb-16 px-3 bg-black/15" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-[520px] p-6 relative animate-in fade-in slide-in-from-bottom-2 duration-150"
+        className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-[520px] max-h-[82%] overflow-y-auto p-4 sm:p-6 relative animate-in fade-in slide-in-from-bottom-2 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-gray-200">
-          <h3 className="font-bold text-base text-gray-900">{moduleTitle} Questions</h3>
+        <div className="flex items-center justify-between pb-2.5 border-b border-gray-200">
+          <h3 className="font-bold text-sm sm:text-base text-gray-900">{moduleTitle} Questions</h3>
           <button
             onClick={onClose}
             className="p-1 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
@@ -45,7 +45,7 @@ export const QuestionNavigatorPopover: React.FC<QuestionNavigatorPopoverProps> =
         </div>
 
         {/* Legend Row */}
-        <div className="flex items-center justify-center gap-6 py-2.5 border-b border-gray-200 text-xs text-gray-700">
+        <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 py-2 border-b border-gray-200 text-xs text-gray-700">
           <div className="flex items-center gap-1.5">
             <MapPin className="w-3.5 h-3.5 text-gray-800" />
             <span>Current</span>
@@ -61,7 +61,7 @@ export const QuestionNavigatorPopover: React.FC<QuestionNavigatorPopoverProps> =
         </div>
 
         {/* Question Numbers Grid (10 columns matching screenshot) */}
-        <div className="grid grid-cols-10 gap-2.5 py-5">
+        <div className="grid grid-cols-9 sm:grid-cols-10 gap-2 py-3.5 sm:py-5">
           {questions.map((q, idx) => {
             const isCurrent = idx === currentIndex;
             const isAnswered = Boolean(answers[q.id] && answers[q.id].trim() !== '');

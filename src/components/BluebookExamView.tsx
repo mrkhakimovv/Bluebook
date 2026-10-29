@@ -17,6 +17,7 @@ import {
   StickyNote,
   Underline,
   Clock,
+  Smartphone,
 } from 'lucide-react';
 import {
   StudentSession,
@@ -68,6 +69,42 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   const [leftPanePercent, setLeftPanePercent] = useState(50);
   const [isLeftExpanded, setIsLeftExpanded] = useState(false);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
+  const [autoLandscapeEnabled, setAutoLandscapeEnabled] = useState(true);
+  const [viewport, setViewport] = useState<{ w: number; h: number }>(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 1280,
+    h: typeof window !== 'undefined' ? window.innerHeight : 800,
+  }));
+
+  useEffect(() => {
+    const updateViewport = () => {
+      const w = window.visualViewport ? Math.round(window.visualViewport.width) : window.innerWidth;
+      const h = window.visualViewport ? Math.round(window.visualViewport.height) : window.innerHeight;
+      setViewport({ w, h });
+    };
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    window.visualViewport?.addEventListener('resize', updateViewport);
+
+    // Attempt native landscape lock when supported by the browser
+    const orientationApi = (window.screen as Screen & {
+      orientation?: { lock?: (type: string) => Promise<void>; unlock?: () => void };
+    })?.orientation;
+    orientationApi?.lock?.('landscape')?.catch(() => {});
+
+    return () => {
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+      window.visualViewport?.removeEventListener('resize', updateViewport);
+      orientationApi?.unlock?.();
+    };
+  }, []);
+
+  const isPortraitMobile = viewport.h > viewport.w && viewport.w < 920;
+  const isRotatedLandscape = isPortraitMobile && autoLandscapeEnabled;
+  const effectiveWidth = isRotatedLandscape ? viewport.h : viewport.w;
+  const effectiveHeight = isRotatedLandscape ? viewport.w : viewport.h;
+  const isCompactLandscape = effectiveHeight < 540 || effectiveWidth < 900;
 
   // Text selection popover state for Highlights & Notes
   const [selectionPopup, setSelectionPopup] = useState<{
@@ -426,10 +463,14 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     if (selectedText && selectedText.length >= 2 && selectedText.length <= 350) {
       const range = sel!.getRangeAt(0);
       const rect = range.getBoundingClientRect();
+      const rawCenterX = rect.left + rect.width / 2;
+      const rawBottomY = rect.bottom + 10;
+      const localX = isRotatedLandscape ? rawBottomY : rawCenterX;
+      const localY = isRotatedLandscape ? viewport.w - rawCenterX + 10 : rawBottomY;
       setSelectionPopup({
         text: selectedText,
-        x: Math.max(120, Math.min(window.innerWidth - 160, rect.left + rect.width / 2)),
-        y: Math.max(80, rect.bottom + 10),
+        x: Math.max(120, Math.min(effectiveWidth - 160, localX)),
+        y: Math.max(60, Math.min(effectiveHeight - 60, localY)),
       });
     } else {
       setSelectionPopup(null);
@@ -489,11 +530,43 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   };
 
   const triggerFullscreen = () => {
+    const orientationApi = (window.screen as Screen & {
+      orientation?: { lock?: (type: string) => Promise<void> };
+    })?.orientation;
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.().catch(() => {});
+      document.documentElement
+        .requestFullscreen?.()
+        .then(() => {
+          orientationApi?.lock?.('landscape')?.catch(() => {});
+        })
+        .catch(() => {});
+    } else {
+      orientationApi?.lock?.('landscape')?.catch(() => {});
     }
     setShowFullscreenBanner(false);
   };
+
+  const updateSplitFromClientCoords = (clientX: number, clientY: number) => {
+    const pct = isRotatedLandscape
+      ? (clientY / Math.max(1, viewport.h)) * 100
+      : (clientX / Math.max(1, viewport.w)) * 100;
+    setLeftPanePercent(Math.min(72, Math.max(28, pct)));
+  };
+
+  const containerTransformStyle: React.CSSProperties = isRotatedLandscape
+    ? {
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        width: `${viewport.h}px`,
+        height: `${viewport.w}px`,
+        transform: 'translate(-50%, -50%) rotate(90deg)',
+        transformOrigin: 'center center',
+        zoom: `${zoomPercent}%`,
+      }
+    : {
+        zoom: `${zoomPercent}%`,
+      };
 
   // Break View between Section 1 (Reading & Writing) and Section 2 (Math)
   if (session.status === 'break') {
@@ -502,15 +575,20 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       : 'math_1';
 
     return (
-      <div className="min-h-screen w-screen bg-[#1b1b1b] text-white flex items-center justify-center p-6 font-sans select-none">
-        <div className="max-w-4xl w-full flex flex-col md:flex-row items-center justify-center gap-12 md:gap-20">
+      <div
+        style={containerTransformStyle}
+        className={`${
+          isRotatedLandscape ? '' : 'min-h-screen w-screen'
+        } bg-[#1b1b1b] text-white flex items-center justify-center p-4 sm:p-6 font-sans select-none overflow-y-auto touch-scroll-pane`}
+      >
+        <div className="max-w-4xl w-full flex flex-row items-center justify-center gap-6 sm:gap-12 md:gap-20">
           {/* Left Column: Remaining Break Time Box + Resume Testing Button */}
           <div className="flex flex-col items-center shrink-0">
-            <div className="w-[220px] rounded-xl border border-[#555555] bg-[#1b1b1b] px-6 py-7 text-center">
-              <div className="text-[13px] font-medium text-gray-100 mb-2">
+            <div className="w-[165px] sm:w-[220px] rounded-xl border border-[#555555] bg-[#1b1b1b] px-4 sm:px-6 py-4 sm:py-7 text-center">
+              <div className="text-[11px] sm:text-[13px] font-medium text-gray-100 mb-1.5 sm:mb-2">
                 Remaining Break Time:
               </div>
-              <div className="text-[60px] leading-none font-bold text-white tracking-tight tabular-nums">
+              <div className="text-[40px] sm:text-[60px] leading-none font-bold text-white tracking-tight tabular-nums">
                 {formatBreakTimer(breakSecondsLeft)}
               </div>
             </div>
@@ -524,7 +602,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                   viewMode: 'question',
                 })
               }
-              className="mt-6 px-7 py-2.5 rounded-lg bg-[#f0c330] hover:bg-[#e0b420] text-[#111111] font-semibold text-[13.5px] transition-colors cursor-pointer shadow-xs"
+              className="mt-4 sm:mt-6 px-5 sm:px-7 py-2 sm:py-2.5 rounded-lg bg-[#f0c330] hover:bg-[#e0b420] text-[#111111] font-semibold text-xs sm:text-[13.5px] transition-colors cursor-pointer shadow-xs"
             >
               Resume Testing
             </button>
@@ -532,29 +610,29 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
           {/* Right Column: Practice Test Break Instructions & Rules */}
           <div className="max-w-[460px] text-left">
-            <h1 className="text-[26px] font-bold text-white tracking-tight mb-3">
+            <h1 className="text-lg sm:text-[26px] font-bold text-white tracking-tight mb-1.5 sm:mb-3">
               Practice Test Break
             </h1>
-            <p className="text-[13.5px] text-gray-200 leading-[1.6]">
+            <p className="text-xs sm:text-[13.5px] text-gray-200 leading-[1.5] sm:leading-[1.6]">
               You can resume this practice test as soon as you&apos;re ready to move on. On
               test day, you&apos;ll wait until the clock counts down.
             </p>
 
-            <hr className="border-[#3a3a3a] my-5" />
+            <hr className="border-[#3a3a3a] my-2.5 sm:my-5" />
 
-            <h2 className="text-[21px] font-bold text-white tracking-tight mb-2.5">
+            <h2 className="text-sm sm:text-[21px] font-bold text-white tracking-tight mb-1.5 sm:mb-2.5">
               Take a Break: Do Not Close Your Device
             </h2>
-            <p className="text-[13.5px] text-gray-200 leading-[1.6] mb-4">
+            <p className="text-xs sm:text-[13.5px] text-gray-200 leading-[1.5] sm:leading-[1.6] mb-2 sm:mb-4">
               After the break, a <strong className="font-bold text-white">Resume Testing</strong>{' '}
               button will appear and you&apos;ll start the next section.
             </p>
 
-            <p className="text-[13.5px] font-bold text-white mb-2.5">
+            <p className="text-xs sm:text-[13.5px] font-bold text-white mb-1.5 sm:mb-2.5">
               Follow these rules during the break:
             </p>
 
-            <div className="space-y-2 text-[13.5px] text-gray-200 leading-[1.5] pl-2.5">
+            <div className="space-y-1 sm:space-y-2 text-[11px] sm:text-[13.5px] text-gray-200 leading-[1.4] sm:leading-[1.5] pl-2">
               <div>1. Do not disturb students who are still testing.</div>
               <div>2. Do not exit the app or close your laptop.</div>
               <div>
@@ -578,26 +656,43 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
   return (
     <div
-      className="h-screen w-screen overflow-hidden flex flex-col bg-white select-text"
-      style={{ zoom: `${zoomPercent}%` }}
+      className={`${
+        isRotatedLandscape ? '' : 'h-dvh w-screen'
+      } overflow-hidden flex flex-col bg-white select-text`}
+      style={containerTransformStyle}
       onMouseMove={(e) => {
         if (!isDraggingSplit) return;
-        const pct = (e.clientX / window.innerWidth) * 100;
-        setLeftPanePercent(Math.min(72, Math.max(28, pct)));
+        updateSplitFromClientCoords(e.clientX, e.clientY);
       }}
       onMouseUp={() => setIsDraggingSplit(false)}
+      onTouchMove={(e) => {
+        if (!isDraggingSplit || e.touches.length === 0) return;
+        const t = e.touches[0];
+        updateSplitFromClientCoords(t.clientX, t.clientY);
+      }}
+      onTouchEnd={() => setIsDraggingSplit(false)}
     >
       {/* 1. Optional Top Blue Fullscreen Banner */}
       {showFullscreenBanner && (
-        <div className="bg-[#2563eb] text-white text-xs py-1.5 px-4 flex items-center justify-center gap-3 shrink-0">
-          <button onClick={triggerFullscreen} className="flex items-center gap-1.5 hover:underline">
-            <span>Press</span>
-            <kbd className="px-1.5 py-0.5 bg-white/20 rounded text-[11px] font-mono">F11</kbd>
-            <span>for fullscreen — all buttons will be visible</span>
+        <div
+          className={`bg-[#2563eb] text-white text-[11px] sm:text-xs ${
+            isCompactLandscape ? 'py-1 px-3' : 'py-1.5 px-4'
+          } flex items-center justify-center gap-3 shrink-0`}
+        >
+          <button onClick={triggerFullscreen} className="flex items-center gap-1.5 hover:underline cursor-pointer">
+            {isPortraitMobile ? (
+              <span>Gorizontal to‘liq ekran rejimi (Fullscreen) uchun bosing</span>
+            ) : (
+              <>
+                <span>Press</span>
+                <kbd className="px-1.5 py-0.5 bg-white/20 rounded text-[11px] font-mono">F11</kbd>
+                <span>for fullscreen — all buttons will be visible</span>
+              </>
+            )}
           </button>
           <button
             onClick={() => setShowFullscreenBanner(false)}
-            className="text-white/80 hover:text-white ml-1"
+            className="text-white/80 hover:text-white ml-1 cursor-pointer"
             title="Dismiss"
           >
             ×
@@ -606,17 +701,25 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       )}
 
       {/* 2. Bluebook Exam Header Bar (#e2e8e0) */}
-      <header className="bg-[#e2e8e0] border-b border-dashed border-gray-400 px-5 py-2 flex items-center justify-between shrink-0 relative">
+      <header
+        className={`bg-[#e2e8e0] border-b border-dashed border-gray-400 ${
+          isCompactLandscape ? 'px-3 py-1' : 'px-5 py-2'
+        } flex items-center justify-between gap-2 shrink-0 relative`}
+      >
         {/* Left: Section & Module Title + Directions */}
-        <div className="flex flex-col items-start min-w-[240px]">
+        <div className="flex flex-col items-start min-w-0 sm:min-w-[200px]">
           <div className="flex items-center gap-2">
-            <h1 className="text-sm font-bold text-gray-900 tracking-tight">
+            <h1
+              className={`${
+                isCompactLandscape ? 'text-xs' : 'text-sm'
+              } font-bold text-gray-900 tracking-tight truncate`}
+            >
               {moduleConfig.title}
             </h1>
           </div>
           <button
             onClick={() => setShowDirections(!showDirections)}
-            className="flex items-center gap-1 text-xs font-medium text-gray-800 hover:text-black mt-0.5 cursor-pointer"
+            className="flex items-center gap-1 text-[11px] sm:text-xs font-medium text-gray-800 hover:text-black mt-0.5 cursor-pointer"
           >
             <span>Directions</span>
             {showDirections ? (
@@ -628,11 +731,13 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
         </div>
 
         {/* Center: Countdown Timer + Hide Button */}
-        <div className="flex flex-col items-center justify-center">
+        <div className="flex flex-col items-center justify-center shrink-0">
           {!hideTimer ? (
-            <>
+            <div className={isCompactLandscape ? 'flex items-center gap-2' : 'flex flex-col items-center'}>
               <div
-                className={`text-xl font-bold tabular-nums tracking-tight leading-none ${
+                className={`${
+                  isCompactLandscape ? 'text-base' : 'text-xl'
+                } font-bold tabular-nums tracking-tight leading-none ${
                   secondsLeft < 300 ? 'text-red-600' : 'text-gray-900'
                 }`}
               >
@@ -640,15 +745,17 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               </div>
               <button
                 onClick={() => setHideTimer(true)}
-                className="mt-1 px-3 py-0.5 rounded-full border border-gray-500 text-[11px] font-medium text-gray-800 hover:bg-black/5 transition-colors cursor-pointer"
+                className={`${
+                  isCompactLandscape ? 'px-2 py-0.5 text-[10px]' : 'mt-1 px-3 py-0.5 text-[11px]'
+                } rounded-full border border-gray-500 font-medium text-gray-800 hover:bg-black/5 transition-colors cursor-pointer`}
               >
                 Hide
               </button>
-            </>
+            </div>
           ) : (
             <button
               onClick={() => setHideTimer(false)}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-gray-500 text-xs font-medium text-gray-800 hover:bg-black/5 cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-gray-500 text-[11px] sm:text-xs font-medium text-gray-800 hover:bg-black/5 cursor-pointer"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>Show Timer</span>
@@ -657,42 +764,50 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
         </div>
 
         {/* Right: Tool Icons (Highlights & Notes, Calculator, Reference, More) */}
-        <div className="flex items-center gap-2 min-w-[240px] justify-end">
+        <div className="flex items-center gap-1 sm:gap-2 min-w-0 sm:min-w-[200px] justify-end">
           <button
             onClick={() => setHighlighterMode(!highlighterMode)}
-            className={`flex flex-col items-center justify-center px-3 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+            className={`flex flex-col items-center justify-center ${
+              isCompactLandscape ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-[11px]'
+            } rounded-lg font-medium transition-colors cursor-pointer ${
               highlighterMode
                 ? 'bg-[#cfd8cc] border border-gray-500 text-gray-900'
                 : 'text-gray-800 hover:bg-black/5'
             }`}
           >
-            <Highlighter className="w-4 h-4 mb-0.5" />
-            <span>Highlights & Notes</span>
+            <Highlighter className="w-3.5 h-3.5 sm:w-4 sm:h-4 mb-0.5" />
+            <span className=" whitespace-nowrap">
+              {isCompactLandscape ? 'Highlights' : 'Highlights & Notes'}
+            </span>
           </button>
 
           {isMathSection && (
             <>
               <button
                 onClick={() => setShowCalculator(!showCalculator)}
-                className={`flex flex-col items-center justify-center px-3 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+                className={`flex flex-col items-center justify-center ${
+                  isCompactLandscape ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-[11px]'
+                } rounded-lg font-medium transition-colors cursor-pointer ${
                   showCalculator
                     ? 'bg-[#cfd8cc] border border-gray-500 text-gray-900'
                     : 'text-gray-800 hover:bg-black/5'
                 }`}
               >
-                <Calculator className="w-4 h-4 mb-0.5" />
+                <Calculator className="w-3.5 h-3.5 sm:w-4 sm:h-4 mb-0.5" />
                 <span>Calculator</span>
               </button>
 
               <button
                 onClick={() => setShowReference(!showReference)}
-                className={`flex flex-col items-center justify-center px-3 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+                className={`flex flex-col items-center justify-center ${
+                  isCompactLandscape ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-[11px]'
+                } rounded-lg font-medium transition-colors cursor-pointer ${
                   showReference
                     ? 'bg-[#cfd8cc] border border-gray-500 text-gray-900'
                     : 'text-gray-800 hover:bg-black/5'
                 }`}
               >
-                <BookOpen className="w-4 h-4 mb-0.5" />
+                <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 mb-0.5" />
                 <span>Reference</span>
               </button>
             </>
@@ -702,49 +817,67 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           <div className="relative">
             <button
               onClick={() => setShowMoreMenu(!showMoreMenu)}
-              className={`flex flex-col items-center justify-center px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`flex flex-col items-center justify-center ${
+                isCompactLandscape ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]'
+              } rounded-lg font-medium transition-colors cursor-pointer ${
                 showMoreMenu
                   ? 'bg-[#cfd8cc] border border-[#1e3a5f] text-gray-900'
                   : 'text-gray-800 hover:bg-black/5'
               }`}
             >
-              <MoreVertical className="w-4 h-4 mb-0.5" />
+              <MoreVertical className="w-3.5 h-3.5 sm:w-4 sm:h-4 mb-0.5" />
               <span>More</span>
             </button>
 
             {showMoreMenu && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 text-xs text-gray-800">
+              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 text-xs text-gray-800">
                 <button
                   onClick={() => {
                     setShowMoreMenu(false);
                     setShowHelpModal(true);
                   }}
-                  className="w-full px-4 py-2.5 text-left hover:bg-gray-100 flex items-center gap-2.5"
+                  className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2.5 cursor-pointer"
                 >
                   <HelpCircle className="w-4 h-4 text-gray-600" />
                   <span>Help</span>
                 </button>
                 <button
                   onClick={() => setZoomPercent((z) => Math.min(130, z + 10))}
-                  className="w-full px-4 py-2.5 text-left hover:bg-gray-100 flex items-center gap-2.5"
+                  className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2.5 cursor-pointer"
                 >
                   <ZoomIn className="w-4 h-4 text-gray-600" />
                   <span>Zoom In ({zoomPercent}%)</span>
                 </button>
                 <button
                   onClick={() => setZoomPercent((z) => Math.max(80, z - 10))}
-                  className="w-full px-4 py-2.5 text-left hover:bg-gray-100 flex items-center gap-2.5"
+                  className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2.5 cursor-pointer"
                 >
                   <ZoomOut className="w-4 h-4 text-gray-600" />
                   <span>Zoom Out ({zoomPercent}%)</span>
                 </button>
+                {isPortraitMobile && (
+                  <button
+                    onClick={() => {
+                      setAutoLandscapeEnabled(!autoLandscapeEnabled);
+                      setShowMoreMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100 flex items-center gap-2.5 cursor-pointer"
+                  >
+                    <Smartphone className="w-4 h-4 text-[#2563eb]" />
+                    <span>
+                      {autoLandscapeEnabled
+                        ? 'Tik (Vertikal) rejimga o‘tish'
+                        : 'Avto-Gorizontal rejimni yoqish'}
+                    </span>
+                  </button>
+                )}
                 <div className="my-1 border-t border-gray-100" />
                 <button
                   onClick={() => {
                     setShowMoreMenu(false);
                     onExitExam();
                   }}
-                  className="w-full px-4 py-2.5 text-left hover:bg-red-50 text-red-600 font-medium flex items-center gap-2.5"
+                  className="w-full px-4 py-2 text-left hover:bg-red-50 text-red-600 font-medium flex items-center gap-2.5 cursor-pointer"
                 >
                   <LogOut className="w-4 h-4" />
                   <span>Exit Test</span>
@@ -756,12 +889,12 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
         {/* Directions Dropdown Popover */}
         {showDirections && (
-          <div className="absolute left-5 top-16 z-40 bg-white rounded-xl shadow-2xl border border-gray-300 max-w-xl p-5 space-y-3 text-xs text-gray-800 leading-relaxed">
+          <div className="absolute left-3 sm:left-5 top-12 sm:top-16 z-40 bg-white rounded-xl shadow-2xl border border-gray-300 max-w-xl w-[calc(100%-24px)] max-h-[75vh] overflow-y-auto p-4 sm:p-5 space-y-2.5 text-xs text-gray-800 leading-relaxed">
             <div className="flex items-center justify-between border-b border-gray-200 pb-2">
               <span className="font-bold text-sm text-gray-900">Directions</span>
               <button
                 onClick={() => setShowDirections(false)}
-                className="p-1 rounded hover:bg-gray-100"
+                className="p-1 rounded hover:bg-gray-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -841,11 +974,13 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               {/* Left Passage or SPR Directions Pane */}
               <div
                 style={{ width: isLeftExpanded ? '70%' : `${leftPanePercent}%` }}
-                className="h-full overflow-y-auto px-8 py-6 relative bg-white"
+                className={`h-full overflow-y-auto touch-scroll-pane ${
+                  isCompactLandscape ? 'px-4 py-3' : 'px-8 py-6'
+                } relative bg-white`}
               >
                 <button
                   onClick={() => setIsLeftExpanded(!isLeftExpanded)}
-                  className="absolute top-3 right-4 p-1.5 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-100"
+                  className="absolute top-2.5 right-3 p-1.5 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-100 cursor-pointer"
                   title="Expand/Restore left pane"
                 >
                   {isLeftExpanded ? (
@@ -961,8 +1096,10 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
                 {currentQuestion.passage && (
                   <div
-                    className={`font-serif text-[17px] leading-[1.75] text-gray-900 max-w-2xl ${
-                      isSprQuestion ? 'mt-6 pt-5 border-t border-gray-200' : 'pt-2'
+                    className={`font-serif ${
+                      isCompactLandscape ? 'text-[15px] leading-[1.6]' : 'text-[17px] leading-[1.75]'
+                    } text-gray-900 max-w-2xl ${
+                      isSprQuestion ? 'mt-5 pt-4 border-t border-gray-200' : 'pt-1'
                     }`}
                     dangerouslySetInnerHTML={{
                       __html: renderHighlightedHtml(currentQuestion.passage || ''),
@@ -973,7 +1110,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                 {/* Active Highlights List for quick removal */}
                 {(session.highlights || []).filter((h) => h.questionId === currentQuestion.id)
                   .length > 0 && (
-                  <div className="mt-8 pt-4 border-t border-gray-100 space-y-1.5">
+                  <div className="mt-6 pt-3 border-t border-gray-100 space-y-1.5">
                     <span className="text-[11px] font-medium text-gray-400">
                       Applied Highlights (click × to remove):
                     </span>
@@ -1002,7 +1139,8 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               {/* Center Resizable Divider */}
               <div
                 onMouseDown={() => setIsDraggingSplit(true)}
-                className="w-[3px] bg-gray-300 hover:bg-gray-400 relative cursor-col-resize flex items-center justify-center shrink-0 select-none"
+                onTouchStart={() => setIsDraggingSplit(true)}
+                className="w-[4px] bg-gray-300 hover:bg-gray-400 relative cursor-col-resize flex items-center justify-center shrink-0 select-none touch-none"
               >
                 <div className="w-4 h-10 rounded-full bg-[#1f2937] text-white flex items-center justify-center text-[9px] font-mono shadow-md">
                   &lt;&gt;
@@ -1010,13 +1148,21 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               </div>
 
               {/* Right Question & Options Pane */}
-              <div className="flex-1 h-full overflow-y-auto px-8 py-6">
+              <div
+                className={`flex-1 h-full overflow-y-auto touch-scroll-pane ${
+                  isCompactLandscape ? 'px-4 py-3' : 'px-8 py-6'
+                }`}
+              >
                 {renderQuestionRightContent()}
               </div>
             </>
           ) : (
             /* SINGLE CENTERED COLUMN (Math) */
-            <div className="flex-1 h-full overflow-y-auto px-6 py-5">
+            <div
+              className={`flex-1 h-full overflow-y-auto touch-scroll-pane ${
+                isCompactLandscape ? 'px-4 py-3' : 'px-6 py-5'
+              }`}
+            >
               <div className="max-w-[780px] mx-auto w-full">
                 {renderQuestionRightContent()}
               </div>
@@ -1027,16 +1173,22 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
       {/* 4. Bluebook Exam Footer Bar (#e2e8e0) */}
       {session.viewMode !== 'review' && (
-        <footer className="bg-[#e2e8e0] border-t border-dashed border-gray-400 px-6 py-2.5 flex items-center justify-between shrink-0">
+        <footer
+          className={`bg-[#e2e8e0] border-t border-dashed border-gray-400 ${
+            isCompactLandscape ? 'px-3.5 py-1.5' : 'px-6 py-2.5'
+          } flex items-center justify-between gap-2 shrink-0`}
+        >
           {/* Left: Student Full Name */}
-          <div className="text-sm font-bold text-gray-900 min-w-[160px] truncate">
+          <div className="text-xs sm:text-sm font-bold text-gray-900 max-w-[160px] sm:min-w-[160px] truncate">
             {session.fullName}
           </div>
 
           {/* Center: Question X of Y ^ Popover Trigger */}
           <button
             onClick={() => setShowNavigator(!showNavigator)}
-            className="px-4 py-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+            className={`${
+              isCompactLandscape ? 'px-3 py-1.5' : 'px-4 py-2'
+            } rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer shrink-0`}
           >
             <span>
               Question {safeIndex + 1} of {moduleQuestions.length}
@@ -1044,19 +1196,23 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
             <ChevronUp className="w-3.5 h-3.5" />
           </button>
 
-          {/* Right: Back & Next Dark Green Pill Buttons */}
-          <div className="flex items-center justify-end gap-2.5 min-w-[160px]">
+          {/* Right: Back & Next Pill Buttons */}
+          <div className="flex items-center justify-end gap-2 sm:min-w-[160px]">
             {safeIndex > 0 && (
               <button
                 onClick={handleBack}
-                className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer"
+                className={`${
+                  isCompactLandscape ? 'px-4 py-1.5' : 'px-5 py-2'
+                } rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer`}
               >
                 Back
               </button>
             )}
             <button
               onClick={handleNext}
-              className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer"
+              className={`${
+                isCompactLandscape ? 'px-4 py-1.5' : 'px-5 py-2'
+              } rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer`}
             >
               Next
             </button>
@@ -1081,7 +1237,13 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
       <ReferenceModal isOpen={showReference} onClose={() => setShowReference(false)} />
 
       {/* Desmos Graphing Calculator Modal */}
-      <DesmosModal isOpen={showCalculator} onClose={() => setShowCalculator(false)} />
+      <DesmosModal
+        isOpen={showCalculator}
+        onClose={() => setShowCalculator(false)}
+        isRotatedLandscape={isRotatedLandscape}
+        containerWidth={effectiveWidth}
+        containerHeight={effectiveHeight}
+      />
 
       {/* Sticky Note Modal */}
       {activeNoteQuestionId && (
