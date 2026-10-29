@@ -45,7 +45,7 @@ export const CheckYourWorkView: React.FC<CheckYourWorkViewProps> = ({
         {/* 3 Summary Stat Cards matching image_4c2e43ce.png */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col items-center justify-center shadow-xs">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 mb-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#2563eb] mb-2">
               <CheckCircle2 className="w-4 h-4" />
               <span>Answered</span>
             </div>
@@ -93,7 +93,7 @@ export const CheckYourWorkView: React.FC<CheckYourWorkViewProps> = ({
                   onClick={() => onSelectQuestion(idx)}
                   className={`h-10 rounded-lg text-xs font-semibold flex items-center justify-center relative transition-all ${
                     isAnswered
-                      ? 'bg-[#0f172a] text-white border border-[#0f172a] hover:bg-[#1e293b]'
+                      ? 'bg-[#2563eb] text-white border border-[#2563eb] hover:bg-[#1d4ed8]'
                       : 'bg-white text-gray-800 border border-gray-200 hover:border-gray-400'
                   }`}
                 >
@@ -108,7 +108,7 @@ export const CheckYourWorkView: React.FC<CheckYourWorkViewProps> = ({
 
           <div className="pt-4 border-t border-gray-100 flex items-center justify-center gap-6 text-xs text-gray-600">
             <div className="flex items-center gap-2">
-              <span className="w-3.5 h-3.5 rounded-xs bg-[#0f172a] inline-block" />
+              <span className="w-3.5 h-3.5 rounded-xs bg-[#2563eb] inline-block" />
               <span>Answered</span>
             </div>
             <div className="flex items-center gap-2">
@@ -141,7 +141,7 @@ export const CheckYourWorkView: React.FC<CheckYourWorkViewProps> = ({
 
         <button
           onClick={onSubmitModule}
-          className="px-5 py-2.5 rounded-full bg-[#026aa7] hover:bg-[#01578a] text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
+          className="px-5 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
         >
           <span>{isLastModule ? 'Submit Exam & View Score' : 'Submit Module'}</span>
           <ChevronRight className="w-4 h-4" />

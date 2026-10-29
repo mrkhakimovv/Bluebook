@@ -17,8 +17,6 @@ import {
   StickyNote,
   Underline,
   Clock,
-  Coffee,
-  ArrowRight,
 } from 'lucide-react';
 import {
   StudentSession,
@@ -39,7 +37,7 @@ import { ReferenceModal } from './ReferenceModal';
 import { DesmosModal } from './DesmosModal';
 import { QuestionNavigatorPopover } from './QuestionNavigatorPopover';
 import { CheckYourWorkView } from './CheckYourWorkView';
-import { renderSATTextWithMath } from '../utils/mathRenderer';
+import { renderSATTextWithMath, renderSprAnswerPreview } from '../utils/mathRenderer';
 
 interface BluebookExamViewProps {
   session: StudentSession;
@@ -65,7 +63,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showNavigator, setShowNavigator] = useState(false);
-  const [eliminatorMode, setEliminatorMode] = useState(true);
+  const [eliminatorMode, setEliminatorMode] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [leftPanePercent, setLeftPanePercent] = useState(50);
   const [isLeftExpanded, setIsLeftExpanded] = useState(false);
@@ -272,10 +270,30 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     return () => clearInterval(interval);
   }, [currentModuleId, session.status]);
 
+  // 10-minute (600s) countdown timer for Practice Test Break between Reading & Writing and Math
+  const [breakSecondsLeft, setBreakSecondsLeft] = useState<number>(600);
+
+  useEffect(() => {
+    if (session.status !== 'break') {
+      setBreakSecondsLeft(600);
+      return;
+    }
+    const interval = setInterval(() => {
+      setBreakSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [session.status]);
+
   const formatTimer = (secs: number) => {
     const mins = Math.floor(secs / 60);
     const rem = secs % 60;
     return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  };
+
+  const formatBreakTimer = (secs: number) => {
+    const mins = Math.floor(secs / 60);
+    const rem = secs % 60;
+    return `${mins}:${String(rem).padStart(2, '0')}`;
   };
 
   const handleSelectOption = (optionId: 'A' | 'B' | 'C' | 'D') => {
@@ -299,10 +317,33 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
   const handleSprChange = (rawVal: string) => {
     if (!currentQuestion) return;
-    // Enforce SAT Student-Produced Response rules: max 5 chars for positive, 6 for negative, only digits, ., /, -
-    const filtered = rawVal.replace(/[^0-9.\-/]/g, '');
-    const maxLen = filtered.startsWith('-') ? 6 : 5;
-    const truncated = filtered.slice(0, maxLen);
+    // Enforce SAT Student-Produced Response rules:
+    // - Only digits, '.', '/', and an optional leading '-'
+    // - Up to 5 characters for a positive answer, up to 6 characters (including '-') for a negative answer
+    const isNegative = rawVal.startsWith('-');
+    const body = (isNegative ? rawVal.slice(1) : rawVal).replace(/[^0-9./]/g, '');
+
+    // Allow at most one '/' or '.' (not multiple slashes or multiple dots)
+    let cleanedBody = '';
+    let hasSlash = false;
+    let hasDot = false;
+    for (const ch of body) {
+      if (ch === '/') {
+        if (hasSlash || hasDot || cleanedBody.length === 0) continue;
+        hasSlash = true;
+        cleanedBody += ch;
+      } else if (ch === '.') {
+        if (hasDot || hasSlash) continue;
+        hasDot = true;
+        cleanedBody += ch;
+      } else {
+        cleanedBody += ch;
+      }
+    }
+
+    const combined = (isNegative ? '-' : '') + cleanedBody;
+    const maxLen = isNegative ? 6 : 5;
+    const truncated = combined.slice(0, maxLen);
 
     onSyncSession({
       answers: {
@@ -454,44 +495,86 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     setShowFullscreenBanner(false);
   };
 
-  // Break View between Section 1 and Section 2
+  // Break View between Section 1 (Reading & Writing) and Section 2 (Math)
   if (session.status === 'break') {
+    const nextMathModule: ModuleId = session.currentModule.startsWith('math_')
+      ? session.currentModule
+      : 'math_1';
+
     return (
-      <div className="min-h-screen bg-[#111827] text-white flex flex-col items-center justify-center p-6">
-        <div className="max-w-lg w-full bg-[#1e293b] border border-slate-700 rounded-2xl p-8 text-center space-y-6">
-          <div className="w-14 h-14 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400">
-            <Coffee className="w-7 h-7" />
+      <div className="min-h-screen w-screen bg-[#1b1b1b] text-white flex items-center justify-center p-6 font-sans select-none">
+        <div className="max-w-4xl w-full flex flex-col md:flex-row items-center justify-center gap-12 md:gap-20">
+          {/* Left Column: Remaining Break Time Box + Resume Testing Button */}
+          <div className="flex flex-col items-center shrink-0">
+            <div className="w-[220px] rounded-xl border border-[#555555] bg-[#1b1b1b] px-6 py-7 text-center">
+              <div className="text-[13px] font-medium text-gray-100 mb-2">
+                Remaining Break Time:
+              </div>
+              <div className="text-[60px] leading-none font-bold text-white tracking-tight tabular-nums">
+                {formatBreakTimer(breakSecondsLeft)}
+              </div>
+            </div>
+
+            <button
+              onClick={() =>
+                onSyncSession({
+                  status: 'in_progress',
+                  currentModule: nextMathModule,
+                  currentQuestionIndex: 0,
+                  viewMode: 'question',
+                })
+              }
+              className="mt-6 px-7 py-2.5 rounded-lg bg-[#f0c330] hover:bg-[#e0b420] text-[#111111] font-semibold text-[13.5px] transition-colors cursor-pointer shadow-xs"
+            >
+              Resume Testing
+            </button>
           </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-bold">Section 1 Completed</h1>
-            <p className="text-sm text-slate-300">
-              Siz Reading and Writing bo‘limining ikkala modulini yakunladingiz. Endi Section 2: Math bo‘limiga o‘tishingiz mumkin.
+
+          {/* Right Column: Practice Test Break Instructions & Rules */}
+          <div className="max-w-[460px] text-left">
+            <h1 className="text-[26px] font-bold text-white tracking-tight mb-3">
+              Practice Test Break
+            </h1>
+            <p className="text-[13.5px] text-gray-200 leading-[1.6]">
+              You can resume this practice test as soon as you&apos;re ready to move on. On
+              test day, you&apos;ll wait until the clock counts down.
             </p>
+
+            <hr className="border-[#3a3a3a] my-5" />
+
+            <h2 className="text-[21px] font-bold text-white tracking-tight mb-2.5">
+              Take a Break: Do Not Close Your Device
+            </h2>
+            <p className="text-[13.5px] text-gray-200 leading-[1.6] mb-4">
+              After the break, a <strong className="font-bold text-white">Resume Testing</strong>{' '}
+              button will appear and you&apos;ll start the next section.
+            </p>
+
+            <p className="text-[13.5px] font-bold text-white mb-2.5">
+              Follow these rules during the break:
+            </p>
+
+            <div className="space-y-2 text-[13.5px] text-gray-200 leading-[1.5] pl-2.5">
+              <div>1. Do not disturb students who are still testing.</div>
+              <div>2. Do not exit the app or close your laptop.</div>
+              <div>
+                3. Do not access phones, smartwatches, textbooks, notes, or the
+                internet.
+              </div>
+              <div>4. Do not eat or drink near any testing device.</div>
+              <div>
+                5. Do not speak in the testing room; outside the room, do not discuss
+                the exam with anyone.
+              </div>
+            </div>
           </div>
-          <div className="bg-slate-900/60 rounded-xl p-4 text-xs text-slate-300 space-y-1">
-            <div>O‘quvchi: <strong>{session.fullName}</strong></div>
-            <div>Keyingi bosqich: <strong>Section 2, Module 1: Math (22 savol, 35 daqiqa)</strong></div>
-          </div>
-          <button
-            onClick={() =>
-              onSyncSession({
-                status: 'in_progress',
-                currentModule: 'math_1',
-                currentQuestionIndex: 0,
-                viewMode: 'question',
-              })
-            }
-            className="w-full py-3 px-6 rounded-full bg-[#1b4332] hover:bg-[#245942] text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-          >
-            <span>Start Section 2: Math</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
         </div>
       </div>
     );
   }
 
-  const hasSplitPassage = Boolean(currentQuestion?.passage);
+  const isSprQuestion = currentQuestion?.type === 'spr';
+  const hasSplitPassage = Boolean(currentQuestion?.passage) || isSprQuestion;
 
   return (
     <div
@@ -755,15 +838,15 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           {hasSplitPassage ? (
             /* SPLIT VIEW (Reading & Writing or Math with Passage) */
             <>
-              {/* Left Passage Pane */}
+              {/* Left Passage or SPR Directions Pane */}
               <div
                 style={{ width: isLeftExpanded ? '70%' : `${leftPanePercent}%` }}
-                className="h-full overflow-y-auto px-8 py-6 relative"
+                className="h-full overflow-y-auto px-8 py-6 relative bg-white"
               >
                 <button
                   onClick={() => setIsLeftExpanded(!isLeftExpanded)}
                   className="absolute top-3 right-4 p-1.5 rounded text-gray-500 hover:text-gray-900 hover:bg-gray-100"
-                  title="Expand/Restore passage pane"
+                  title="Expand/Restore left pane"
                 >
                   {isLeftExpanded ? (
                     <Minimize2 className="w-4 h-4" />
@@ -772,12 +855,120 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                   )}
                 </button>
 
-                <div
-                  className="font-serif text-[17px] leading-[1.75] text-gray-900 max-w-2xl pt-2"
-                  dangerouslySetInnerHTML={{
-                    __html: renderHighlightedHtml(currentQuestion.passage || ''),
-                  }}
-                />
+                {isSprQuestion && (
+                  <div className="max-w-2xl pt-1 pb-4 font-sans text-gray-900">
+                    <h2 className="text-[19px] font-bold text-gray-900 mb-3 tracking-tight">
+                      Student-Produced Response Directions
+                    </h2>
+                    <ul className="list-disc pl-5 space-y-2 text-[14.5px] leading-[1.55] text-gray-900">
+                      <li>
+                        If you find <strong>more than one correct answer</strong>, enter only one answer.
+                      </li>
+                      <li>
+                        You can enter up to 5 characters for a <strong>positive</strong> answer and up to 6 characters (including the negative sign) for a <strong>negative</strong> answer.
+                      </li>
+                      <li>
+                        If your answer is a <strong>fraction</strong> that doesn&apos;t fit in the provided space, enter the decimal equivalent.
+                      </li>
+                      <li>
+                        If your answer is a <strong>decimal</strong> that doesn&apos;t fit, enter it by truncating or rounding at the fourth digit.
+                      </li>
+                      <li>
+                        If your answer is a <strong>mixed number</strong> (such as{' '}
+                        <span
+                          dangerouslySetInnerHTML={{
+                            __html: renderSATTextWithMath('$3\\frac{1}{2}$'),
+                          }}
+                        />
+                        ), enter it as an improper fraction (7/2) or its decimal equivalent (3.5).
+                      </li>
+                      <li>
+                        Don&apos;t enter symbols such as a percent sign, comma, or dollar sign.
+                      </li>
+                    </ul>
+
+                    <h3 className="text-[15px] font-bold text-gray-900 mt-5 mb-2.5">
+                      Examples
+                    </h3>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse border border-gray-300 text-[13.5px] text-center text-gray-900">
+                        <thead>
+                          <tr className="bg-gray-100">
+                            <th className="border border-gray-300 px-3 py-2.5 font-semibold w-[22%]">
+                              Answer
+                            </th>
+                            <th className="border border-gray-300 px-3 py-2.5 font-semibold w-[39%]">
+                              Acceptable ways to enter answer
+                            </th>
+                            <th className="border border-gray-300 px-3 py-2.5 font-semibold w-[39%]">
+                              Unacceptable: will not receive credit
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="border border-gray-300 px-3 py-4 align-middle font-medium">
+                              3.5
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>3.5</div>
+                              <div>3.50</div>
+                              <div>7/2</div>
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>3 1/2</div>
+                              <div>31/2</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="border border-gray-300 px-3 py-4 align-middle font-medium">
+                              2/3
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>2/3</div>
+                              <div>.6666</div>
+                              <div>.6667</div>
+                              <div>0.666</div>
+                              <div>0.667</div>
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>0.66</div>
+                              <div>.66</div>
+                              <div>0.67</div>
+                              <div>.67</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="border border-gray-300 px-3 py-4 align-middle font-medium">
+                              -1/3
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>-1/3</div>
+                              <div>-.3333</div>
+                              <div>-0.333</div>
+                            </td>
+                            <td className="border border-gray-300 px-3 py-3 align-middle space-y-1">
+                              <div>-.33</div>
+                              <div>-0.33</div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {currentQuestion.passage && (
+                  <div
+                    className={`font-serif text-[17px] leading-[1.75] text-gray-900 max-w-2xl ${
+                      isSprQuestion ? 'mt-6 pt-5 border-t border-gray-200' : 'pt-2'
+                    }`}
+                    dangerouslySetInnerHTML={{
+                      __html: renderHighlightedHtml(currentQuestion.passage || ''),
+                    }}
+                  />
+                )}
 
                 {/* Active Highlights List for quick removal */}
                 {(session.highlights || []).filter((h) => h.questionId === currentQuestion.id)
@@ -845,7 +1036,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
           {/* Center: Question X of Y ^ Popover Trigger */}
           <button
             onClick={() => setShowNavigator(!showNavigator)}
-            className="px-4 py-2 rounded-lg bg-[#111827] hover:bg-[#1f2937] text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+            className="px-4 py-2 rounded-lg bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
           >
             <span>
               Question {safeIndex + 1} of {moduleQuestions.length}
@@ -858,14 +1049,14 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
             {safeIndex > 0 && (
               <button
                 onClick={handleBack}
-                className="px-5 py-2 rounded-full bg-[#1b4332] hover:bg-[#143325] text-white text-xs font-bold transition-colors cursor-pointer"
+                className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer"
               >
                 Back
               </button>
             )}
             <button
               onClick={handleNext}
-              className="px-5 py-2 rounded-full bg-[#1b4332] hover:bg-[#143325] text-white text-xs font-bold transition-colors cursor-pointer"
+              className="px-5 py-2 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold transition-colors cursor-pointer"
             >
               Next
             </button>
@@ -984,7 +1175,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               onClick={() => setEliminatorMode(!eliminatorMode)}
               className={`px-2.5 py-1 rounded-md border text-xs font-bold tracking-tight transition-colors cursor-pointer ${
                 eliminatorMode
-                  ? 'bg-[#1b4332] text-white border-[#1b4332]'
+                  ? 'bg-[#2563eb] text-white border-[#2563eb]'
                   : 'bg-white text-gray-900 border-gray-500 hover:bg-gray-100'
               }`}
               title="Toggle Option Eliminator"
@@ -1030,7 +1221,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                       onClick={() => handleSelectOption(opt.id)}
                       className={`flex-1 text-left rounded-lg px-4 py-3 flex items-center gap-3.5 relative transition-all cursor-pointer ${
                         isSelected
-                          ? 'border-2 border-[#1b4332] bg-emerald-50/25 shadow-xs'
+                          ? 'border-2 border-[#2563eb] bg-blue-50/35 shadow-xs'
                           : 'border border-gray-500 hover:border-gray-800 bg-white'
                       }`}
                     >
@@ -1043,7 +1234,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                           isEliminated
                             ? 'border border-gray-300 text-gray-400'
                             : isSelected
-                            ? 'bg-[#1b4332] text-white border border-[#1b4332]'
+                            ? 'bg-[#2563eb] text-white border border-[#2563eb]'
                             : 'border border-gray-700 text-gray-900'
                         }`}
                       >
@@ -1081,31 +1272,38 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
               })}
             </div>
           ) : (
-            /* Student-Produced Response */
-            <div className="space-y-5 pt-2">
-              <div className="bg-[#f3f4f6] border border-gray-200 rounded-xl p-5 space-y-1.5 text-gray-800">
-                <h4 className="text-xs font-bold text-gray-900 font-sans">
-                  Student-produced response
-                </h4>
-                <p className="text-xs leading-relaxed text-gray-700 font-sans">
-                  Enter your answer in the box. You can enter up to 5 characters for a positive answer and 6 characters (including the negative sign) for a negative answer. Answers can be integers, decimals, or fractions.
-                </p>
-              </div>
-
-              <div className="space-y-2 font-sans">
-                <label className="block text-xs font-bold text-gray-900">
-                  Your answer
+            /* Student-Produced Response (SPR) Input & Answer Preview */
+            <div className="space-y-3 pt-2 font-sans">
+              <div className="space-y-2">
+                <label
+                  htmlFor={`spr-input-${currentQuestion.id}`}
+                  className="block text-[14px] font-medium text-gray-600"
+                >
+                  Enter your answer
                 </label>
                 <input
+                  id={`spr-input-${currentQuestion.id}`}
                   type="text"
+                  inputMode="text"
+                  autoComplete="off"
                   value={currentAnswer}
                   onChange={(e) => handleSprChange(e.target.value)}
-                  placeholder="Type your answer"
-                  className="w-48 px-4 py-3 rounded-xl border border-gray-400 focus:border-[#1b4332] focus:ring-2 focus:ring-[#1b4332]/15 focus:outline-none text-sm font-mono text-gray-900"
+                  className="w-[240px] h-[52px] px-4 rounded-lg border-2 border-gray-400 focus:border-gray-900 focus:outline-none text-[18px] font-sans text-gray-900 bg-white transition-colors"
                 />
-                <p className="text-[11px] text-gray-500">
-                  Examples: 5, -3, 0.75, 3/4, 1.5
-                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1 min-h-[36px]">
+                <span className="text-[14px] font-medium text-gray-800">
+                  Answer Preview:
+                </span>
+                {currentAnswer && (
+                  <span
+                    className="text-[18px] font-semibold text-gray-900 inline-flex items-center"
+                    dangerouslySetInnerHTML={{
+                      __html: renderSprAnswerPreview(currentAnswer),
+                    }}
+                  />
+                )}
               </div>
             </div>
           )}

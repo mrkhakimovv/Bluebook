@@ -79,7 +79,7 @@ export const QuestionNavigatorPopover: React.FC<QuestionNavigatorPopoverProps> =
                   }}
                   className={`w-9 h-9 text-xs font-bold flex items-center justify-center relative transition-all ${
                     isAnswered
-                      ? 'bg-[#1b4332] text-white border border-[#1b4332]'
+                      ? 'bg-[#2563eb] text-white border border-[#2563eb]'
                       : 'bg-white text-gray-900 border border-dashed border-gray-400 hover:border-gray-700'
                   } ${
                     isCurrent
@@ -104,7 +104,7 @@ export const QuestionNavigatorPopover: React.FC<QuestionNavigatorPopoverProps> =
               onClose();
               onGoToReviewPage();
             }}
-            className="px-6 py-2 rounded-full border border-[#1b4332] text-[#1b4332] text-xs font-bold hover:bg-[#1b4332]/5 transition-colors"
+            className="px-6 py-2 rounded-full border border-[#2563eb] text-[#2563eb] text-xs font-bold hover:bg-[#2563eb]/5 transition-colors"
           >
             Go to Review Page
           </button>

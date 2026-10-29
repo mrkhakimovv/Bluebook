@@ -16,6 +16,85 @@ const VALID_DIFFICULTIES: QuestionDifficulty[] = ['easy', 'medium', 'hard'];
 const VALID_VARIANTS: QuestionVariant[] = ['easy', 'hard'];
 const OPTION_IDS: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
 
+const ALPHANUM = '0123456789abcdefghijklmnopqrstuvwxyz';
+const LOWER_LETTERS = 'abcdefghijklmnopqrstuvwxyz';
+const DIGITS = '0123456789';
+
+/**
+ * Checks whether an ID is exactly 7 characters of lowercase letters and digits,
+ * containing at least one lowercase letter and at least one digit.
+ */
+export function isSevenCharQuestionId(id: string): boolean {
+  return /^(?=.*[a-z])(?=.*[0-9])[a-z0-9]{7}$/.test(id);
+}
+
+/**
+ * Deterministically converts any legacy question ID (e.g., "math_1_q1") into a
+ * 7-character lowercase letter + digit combination (e.g., "a7k9m2x"), avoiding collisions.
+ */
+export function toDeterministicSevenCharId(
+  rawId: string,
+  usedIds?: Set<string>
+): string {
+  const clean = (rawId || '').trim();
+  if (isSevenCharQuestionId(clean) && (!usedIds || !usedIds.has(clean))) {
+    usedIds?.add(clean);
+    return clean;
+  }
+
+  let attempt = 0;
+  while (true) {
+    const input = attempt === 0 ? clean || 'q' : `${clean}#${attempt}`;
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < input.length; i++) {
+      const c = input.charCodeAt(i);
+      h1 ^= c;
+      h1 = Math.imul(h1, 0x01000193) >>> 0;
+      h2 ^= (c + i * 31) & 0xff;
+      h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+    }
+
+    const chars: string[] = [];
+    let v1 = h1;
+    let v2 = h2;
+    for (let i = 0; i < 7; i++) {
+      const combined = ((v1 ^ (v2 >>> (i * 3))) + i * 17) >>> 0;
+      chars.push(ALPHANUM[combined % 36]);
+      v1 = ((v1 >>> 5) | (v1 << 27)) >>> 0;
+      v2 = Math.imul(v2 ^ (i + 1), 0x27d4eb2d) >>> 0;
+    }
+
+    // Guarantee at least one lowercase letter and at least one digit
+    if (!chars.some((ch) => ch >= 'a' && ch <= 'z')) {
+      const pos = h1 % 7;
+      chars[pos] = LOWER_LETTERS[h2 % 26];
+    }
+    if (!chars.some((ch) => ch >= '0' && ch <= '9')) {
+      const pos = (h1 % 7 === h2 % 7 ? h2 + 1 : h2) % 7;
+      chars[pos] = DIGITS[(h1 >>> 4) % 10];
+    }
+
+    const candidate = chars.join('');
+    if (!usedIds || !usedIds.has(candidate)) {
+      usedIds?.add(candidate);
+      return candidate;
+    }
+    attempt++;
+  }
+}
+
+/**
+ * Generates a new random 7-character ID made of lowercase letters and digits.
+ */
+export function generateSevenCharQuestionId(usedIds?: Set<string>): string {
+  const randomSeed = `q_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2)}_${Math.random().toString(36).slice(2)}`;
+  return toDeterministicSevenCharId(randomSeed, usedIds);
+}
+
+
 export function inferSectionFromQuestionData(
   obj: {
     domain?: string;
@@ -336,6 +415,7 @@ export type ImportPlacementTarget =
 export interface ParseQuestionImportOptions {
   targetPlacement?: ImportPlacementTarget;
   autoBalanceModules?: boolean;
+  fallbackSection?: 'rw' | 'math';
 }
 
 function parseRawOptions(rawOpts: unknown): QuestionOption[] | undefined {
@@ -401,6 +481,360 @@ export function formatModuleVariantLabel(key: string): string {
   }
 }
 
+function inferDifficultyTier(q: {
+  difficulty?: QuestionDifficulty;
+  b?: number;
+  variant?: QuestionVariant;
+}): QuestionDifficulty {
+  if (q.difficulty === 'easy' || q.difficulty === 'medium' || q.difficulty === 'hard') {
+    return q.difficulty;
+  }
+  if (typeof q.b === 'number' && Number.isFinite(q.b)) {
+    if (q.b <= -0.35) return 'easy';
+    if (q.b >= 0.35) return 'hard';
+    return 'medium';
+  }
+  if (q.variant === 'easy') return 'easy';
+  if (q.variant === 'hard') return 'hard';
+  return 'medium';
+}
+
+function getDifficultyNumericRank(q: {
+  difficulty?: QuestionDifficulty;
+  b?: number;
+  variant?: QuestionVariant;
+}): number {
+  const tier = inferDifficultyTier(q);
+  const tierBase = tier === 'easy' ? 0 : tier === 'medium' ? 1 : 2;
+  const bOffset =
+    typeof q.b === 'number' && Number.isFinite(q.b)
+      ? Math.max(-0.49, Math.min(0.49, q.b / 12))
+      : 0;
+  return tierBase + bOffset;
+}
+
+interface DistributableEntry {
+  item: ImportedQuestionItem;
+  originalIndex: number;
+  section: 'rw' | 'math';
+  explicitModuleId?: ModuleId;
+  explicitVariant?: QuestionVariant | 'common';
+}
+
+/**
+ * Distributes questions of a single section ('rw' or 'math') into Module 1 (m1Id)
+ * and Module 2 (m2Id: easy / hard) based on their difficulty level and position.
+ */
+function distributeSectionEntriesByDifficultyAndPosition(
+  secEntries: DistributableEntry[],
+  section: 'rw' | 'math',
+  targetPlacement: ImportPlacementTarget,
+  autoBalance: boolean
+): void {
+  if (secEntries.length === 0) return;
+
+  const m1Id: ModuleId = section === 'rw' ? 'rw_1' : 'math_1';
+  const m2Id: ModuleId = section === 'rw' ? 'rw_2' : 'math_2';
+  const maxPerMod = section === 'rw' ? 27 : 22;
+
+  // Ensure every item has a resolved difficulty property if b or explicitVariant was provided
+  for (const entry of secEntries) {
+    if (!entry.item.difficulty) {
+      if (typeof entry.item.b === 'number' && Number.isFinite(entry.item.b)) {
+        entry.item.difficulty = inferDifficultyTier(entry.item);
+      } else if (entry.explicitVariant === 'easy' || entry.explicitVariant === 'hard') {
+        entry.item.difficulty = entry.explicitVariant;
+      }
+    }
+  }
+
+  const hasExplicitM1 = secEntries.some((e) => e.explicitModuleId === m1Id);
+  const hasExplicitM2 = secEntries.some(
+    (e) =>
+      e.explicitModuleId === m2Id ||
+      e.explicitVariant === 'easy' ||
+      e.explicitVariant === 'hard'
+  );
+  const hasBothModulesExplicit = hasExplicitM1 && hasExplicitM2;
+
+  // Case 1: Small batch (<= maxPerMod) with an explicit single-module / single-variant target
+  // and without conflicting explicit multi-module tags.
+  if (secEntries.length <= maxPerMod && !hasBothModulesExplicit) {
+    if (targetPlacement === 'rw_2_easy' || targetPlacement === 'math_2_easy') {
+      for (const e of secEntries) {
+        e.item.moduleId = m2Id;
+        e.item.variant = 'easy';
+      }
+      return;
+    }
+    if (targetPlacement === 'rw_2_hard' || targetPlacement === 'math_2_hard') {
+      for (const e of secEntries) {
+        e.item.moduleId = m2Id;
+        e.item.variant = 'hard';
+      }
+      return;
+    }
+    if (targetPlacement === m1Id && !hasExplicitM2) {
+      for (const e of secEntries) {
+        e.item.moduleId = m1Id;
+        e.item.variant = undefined;
+      }
+      return;
+    }
+    if (targetPlacement === m2Id) {
+      for (const e of secEntries) {
+        e.item.moduleId = m2Id;
+        if (e.explicitVariant === 'easy' || e.explicitVariant === 'hard') {
+          e.item.variant = e.explicitVariant;
+        } else {
+          const tier = inferDifficultyTier(e.item);
+          if (tier === 'easy') e.item.variant = 'easy';
+          else if (tier === 'hard') e.item.variant = 'hard';
+          else e.item.variant = undefined;
+        }
+      }
+      return;
+    }
+    if (
+      targetPlacement === 'auto' &&
+      !autoBalance &&
+      secEntries.every((e) => e.explicitModuleId)
+    ) {
+      for (const e of secEntries) {
+        e.item.moduleId = e.explicitModuleId!;
+        e.item.variant =
+          e.item.moduleId === m2Id &&
+          (e.explicitVariant === 'easy' || e.explicitVariant === 'hard')
+            ? e.explicitVariant
+            : undefined;
+      }
+      return;
+    }
+  }
+
+  // If only 1 question in total for this section, keep it in its resolved module
+  if (secEntries.length === 1) {
+    const only = secEntries[0];
+    if (only.explicitModuleId === m2Id || targetPlacement.endsWith('_2')) {
+      only.item.moduleId = m2Id;
+      only.item.variant =
+        only.explicitVariant === 'easy' || only.explicitVariant === 'hard'
+          ? only.explicitVariant
+          : inferDifficultyTier(only.item) === 'hard'
+          ? 'hard'
+          : 'easy';
+    } else {
+      only.item.moduleId = m1Id;
+      only.item.variant = undefined;
+    }
+    return;
+  }
+
+  // Case 2: Split across Module 1 (m1Id) and Module 2 (m2Id) based on difficulty level and position.
+  // Calculate target count for M1:
+  // - For 54 R&W questions -> 27 M1 + 27 M2
+  // - For 81 R&W questions -> 27 M1 + 54 M2 (27 easy + 27 hard)
+  // - For 44 Math questions -> 22 M1 + 22 M2
+  // - For 87 Math questions -> 29 M1 + 58 M2 (29 easy + 29 hard) or maxPerMod if <= 3*maxPerMod
+  const total = secEntries.length;
+  let targetM1Count: number;
+  if (total > maxPerMod * 3) {
+    targetM1Count = Math.ceil(total / 3);
+  } else if (total > maxPerMod) {
+    targetM1Count = Math.min(maxPerMod, Math.ceil(total / 2));
+  } else {
+    targetM1Count = Math.ceil(total / 2);
+  }
+
+  const m1Set = new Set<DistributableEntry>();
+  const expM1Only = secEntries.filter(
+    (e) =>
+      e.explicitModuleId === m1Id &&
+      e.explicitVariant !== 'easy' &&
+      e.explicitVariant !== 'hard'
+  );
+  const expM2Only = secEntries.filter(
+    (e) =>
+      e.explicitModuleId === m2Id ||
+      e.explicitVariant === 'easy' ||
+      e.explicitVariant === 'hard'
+  );
+
+  // If the JSON already explicitly divided questions between M1 and M2 and M1 count is within limits,
+  // honor the explicit M1 questions first.
+  if (
+    expM1Only.length > 0 &&
+    expM2Only.length > 0 &&
+    expM1Only.length <= targetM1Count
+  ) {
+    for (const e of expM1Only) {
+      m1Set.add(e);
+    }
+    const remainingPool = secEntries.filter(
+      (e) => !m1Set.has(e) && !expM2Only.includes(e)
+    );
+    for (const e of remainingPool) {
+      if (m1Set.size >= targetM1Count) break;
+      m1Set.add(e);
+    }
+  } else {
+    // Either all items had the same moduleId (e.g., all 54 labeled rw_1 or all 54 labeled rw_2),
+    // or none had moduleId, or M1 had > targetM1Count items.
+    // Split into Module 1 and Module 2 using difficulty tier ('easy', 'medium', 'hard') and position (originalIndex):
+    // Group by difficulty tier while preserving original position order in each tier.
+    const easyTier: DistributableEntry[] = [];
+    const mediumTier: DistributableEntry[] = [];
+    const hardTier: DistributableEntry[] = [];
+
+    for (const e of secEntries) {
+      const tier = inferDifficultyTier(e.item);
+      if (tier === 'easy') easyTier.push(e);
+      else if (tier === 'hard') hardTier.push(e);
+      else mediumTier.push(e);
+    }
+
+    const ratio = targetM1Count / total;
+    let wantEasy = Math.min(easyTier.length, Math.round(easyTier.length * ratio));
+    let wantMed = Math.min(mediumTier.length, Math.round(mediumTier.length * ratio));
+    let wantHard = Math.max(
+      0,
+      Math.min(hardTier.length, targetM1Count - wantEasy - wantMed)
+    );
+
+    // Adjust if rounding left us short or over targetM1Count
+    while (wantEasy + wantMed + wantHard < targetM1Count) {
+      if (wantMed < mediumTier.length) wantMed++;
+      else if (wantEasy < easyTier.length) wantEasy++;
+      else if (wantHard < hardTier.length) wantHard++;
+      else break;
+    }
+    while (wantEasy + wantMed + wantHard > targetM1Count) {
+      if (wantHard > 0) wantHard--;
+      else if (wantMed > 0) wantMed--;
+      else if (wantEasy > 0) wantEasy--;
+      else break;
+    }
+
+    // Within each difficulty tier, prefer items that were NOT explicitly tagged for M2, ordered by original position
+    const sortForM1Preference = (arr: DistributableEntry[]) =>
+      [...arr].sort((a, b) => {
+        const aIsM1 = a.explicitModuleId === m1Id ? 0 : a.explicitModuleId === m2Id ? 2 : 1;
+        const bIsM1 = b.explicitModuleId === m1Id ? 0 : b.explicitModuleId === m2Id ? 2 : 1;
+        return aIsM1 - bIsM1 || a.originalIndex - b.originalIndex;
+      });
+
+    for (const e of sortForM1Preference(easyTier).slice(0, wantEasy)) m1Set.add(e);
+    for (const e of sortForM1Preference(mediumTier).slice(0, wantMed)) m1Set.add(e);
+    for (const e of sortForM1Preference(hardTier).slice(0, wantHard)) m1Set.add(e);
+  }
+
+  const m1Entries = secEntries
+    .filter((e) => m1Set.has(e))
+    .sort(
+      (a, b) =>
+        getDifficultyNumericRank(a.item) - getDifficultyNumericRank(b.item) ||
+        a.originalIndex - b.originalIndex
+    );
+
+  const m2Entries = secEntries
+    .filter((e) => !m1Set.has(e))
+    .sort(
+      (a, b) =>
+        getDifficultyNumericRank(a.item) - getDifficultyNumericRank(b.item) ||
+        a.originalIndex - b.originalIndex
+    );
+
+  // Assign Module 1
+  for (const e of m1Entries) {
+    e.item.moduleId = m1Id;
+    e.item.variant = undefined;
+  }
+
+  // Assign Module 2 and Stage 2 Variants ('easy' | 'hard') based on difficulty and position
+  if (m2Entries.length > 0) {
+    // Sort m2Entries by difficulty rank (easy -> medium -> hard) then original position
+    const targetEasyCount =
+      m2Entries.length > maxPerMod
+        ? Math.min(maxPerMod, Math.ceil(m2Entries.length / 2))
+        : Math.ceil(m2Entries.length / 2);
+
+    m2Entries.forEach((e, idx) => {
+      e.item.moduleId = m2Id;
+      const tier = inferDifficultyTier(e.item);
+      if (tier === 'easy' && idx < maxPerMod) {
+        e.item.variant = 'easy';
+      } else if (tier === 'hard' && m2Entries.length - idx <= maxPerMod) {
+        e.item.variant = 'hard';
+      } else {
+        e.item.variant = idx < targetEasyCount ? 'easy' : 'hard';
+      }
+    });
+  }
+}
+
+/**
+ * Redistributes existing SATQuestions of a given section ('rw' or 'math') into
+ * Module 1 (rw_1 / math_1) and Module 2 (rw_2 / math_2 with easy & hard variants)
+ * based on each question's difficulty level and current position, re-numbering each bucket 1..N.
+ */
+export function redistributeQuestionsByDifficultyAndPosition(
+  allQuestions: SATQuestion[],
+  section: 'rw' | 'math'
+): SATQuestion[] {
+  const secPrefix = section === 'rw' ? 'rw_' : 'math_';
+  const sectionQuestions = allQuestions
+    .filter((q) => q.moduleId.startsWith(secPrefix))
+    .sort(
+      (a, b) =>
+        MODULE_ORDER.indexOf(a.moduleId) - MODULE_ORDER.indexOf(b.moduleId) ||
+        a.number - b.number
+    );
+
+  if (sectionQuestions.length === 0) return [];
+
+  const entries: DistributableEntry[] = sectionQuestions.map((q, idx) => ({
+    item: {
+      moduleId: q.moduleId,
+      variant: q.variant,
+      scored: q.scored !== false,
+      type: q.type,
+      domain: q.domain,
+      skill: q.skill,
+      difficulty: q.difficulty,
+      b: q.b,
+      bSE: q.bSE,
+      infit: q.infit,
+      outfit: q.outfit,
+      passage: q.passage,
+      prompt: q.prompt,
+      mathEquation: q.mathEquation,
+      options: q.options,
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+    },
+    originalIndex: idx,
+    section,
+    explicitModuleId: undefined,
+    explicitVariant: undefined,
+  }));
+
+  distributeSectionEntriesByDifficultyAndPosition(entries, section, 'auto', true);
+
+  const counters = new Map<string, number>();
+  return entries.map((entry, idx) => {
+    const origQ = sectionQuestions[idx];
+    const gKey = getModuleVariantKey(entry.item.moduleId, entry.item.variant);
+    const nextNum = (counters.get(gKey) || 0) + 1;
+    counters.set(gKey, nextNum);
+    return {
+      ...origQ,
+      ...entry.item,
+      id: origQ.id,
+      number: nextNum,
+    };
+  });
+}
+
 export function parseQuestionImport(
   text: string,
   importOptions?: ParseQuestionImportOptions
@@ -421,6 +855,7 @@ export function parseQuestionImport(
 
   const targetPlacement: ImportPlacementTarget = importOptions?.targetPlacement ?? 'auto';
   const autoBalance = importOptions?.autoBalanceModules ?? true;
+  const fallbackSection: 'rw' | 'math' = importOptions?.fallbackSection ?? 'rw';
 
   const trimmed = (text || '').trim();
   if (!trimmed) {
@@ -479,8 +914,7 @@ export function parseQuestionImport(
     };
   }
 
-  let rwAutoCounter = 0;
-  let mathAutoCounter = 0;
+  const parsedEntries: DistributableEntry[] = [];
 
   rawList.forEach((rawItem, idx) => {
     const num = idx + 1;
@@ -498,6 +932,12 @@ export function parseQuestionImport(
       : 'spr';
 
     const rawModuleStr = obj.moduleId ? String(obj.moduleId).trim().toLowerCase() : '';
+    const explicitModuleId: ModuleId | undefined = VALID_MODULES.includes(
+      rawModuleStr as ModuleId
+    )
+      ? (rawModuleStr as ModuleId)
+      : undefined;
+
     const rawVariantStr =
       obj.variant !== undefined && obj.variant !== null && String(obj.variant).trim() !== ''
         ? String(obj.variant).trim().toLowerCase()
@@ -514,65 +954,53 @@ export function parseQuestionImport(
       return;
     }
 
-    let resolvedModuleId: ModuleId;
-    let resolvedVariant: QuestionVariant | undefined =
-      rawVariantStr && VALID_VARIANTS.includes(rawVariantStr as QuestionVariant)
+    const explicitVariant: QuestionVariant | 'common' | undefined =
+      rawVariantStr === 'common'
+        ? 'common'
+        : rawVariantStr && VALID_VARIANTS.includes(rawVariantStr as QuestionVariant)
         ? (rawVariantStr as QuestionVariant)
         : undefined;
 
-    if (targetPlacement === 'rw_2_easy') {
-      resolvedModuleId = 'rw_2';
-      resolvedVariant = 'easy';
-    } else if (targetPlacement === 'rw_2_hard') {
-      resolvedModuleId = 'rw_2';
-      resolvedVariant = 'hard';
-    } else if (targetPlacement === 'math_2_easy') {
-      resolvedModuleId = 'math_2';
-      resolvedVariant = 'easy';
-    } else if (targetPlacement === 'math_2_hard') {
-      resolvedModuleId = 'math_2';
-      resolvedVariant = 'hard';
-    } else if (targetPlacement === 'rw_auto') {
-      resolvedModuleId = rwAutoCounter % 2 === 0 ? 'rw_1' : 'rw_2';
-      rwAutoCounter += 1;
-    } else if (targetPlacement === 'math_auto') {
-      resolvedModuleId = mathAutoCounter % 2 === 0 ? 'math_1' : 'math_2';
-      mathAutoCounter += 1;
-    } else if (targetPlacement !== 'auto' && VALID_MODULES.includes(targetPlacement)) {
-      resolvedModuleId = targetPlacement;
-    } else if (VALID_MODULES.includes(rawModuleStr as ModuleId)) {
-      resolvedModuleId = rawModuleStr as ModuleId;
+    // Determine section ('rw' or 'math')
+    let section: 'rw' | 'math';
+    if (targetPlacement.startsWith('rw_')) {
+      section = 'rw';
+    } else if (targetPlacement.startsWith('math_')) {
+      section = 'math';
+    } else if (explicitModuleId) {
+      section = explicitModuleId.startsWith('rw_') ? 'rw' : 'math';
     } else {
-      const section = inferSectionFromQuestionData({
-        domain: obj.domain ? String(obj.domain) : undefined,
-        type: inferredType,
-        passage: obj.passage ? String(obj.passage) : undefined,
-        prompt: obj.prompt !== undefined ? String(obj.prompt) : '',
-        mathEquation: obj.mathEquation,
-        options,
-      });
+      section = inferSectionFromQuestionData(
+        {
+          domain: obj.domain ? String(obj.domain) : undefined,
+          type: inferredType,
+          passage: obj.passage ? String(obj.passage) : undefined,
+          prompt: obj.prompt !== undefined ? String(obj.prompt) : '',
+          mathEquation: obj.mathEquation,
+          options,
+        },
+        fallbackSection
+      );
+    }
 
-      if (section === 'rw') {
-        resolvedModuleId = rwAutoCounter % 2 === 0 ? 'rw_1' : 'rw_2';
-        rwAutoCounter += 1;
-      } else {
-        resolvedModuleId = mathAutoCounter % 2 === 0 ? 'math_1' : 'math_2';
-        mathAutoCounter += 1;
+    if (section === 'rw' && inferredType === 'spr') {
+      if (targetPlacement === 'auto' || targetPlacement === 'rw_auto') {
+        section = 'math';
       }
     }
 
-    if (
-      (targetPlacement === 'auto' || targetPlacement === 'rw_auto') &&
-      resolvedModuleId.startsWith('rw_') &&
-      inferredType === 'spr'
-    ) {
-      resolvedModuleId = mathAutoCounter % 2 === 0 ? 'math_1' : 'math_2';
-      mathAutoCounter += 1;
-    }
+    const initialModuleId: ModuleId =
+      explicitModuleId && explicitModuleId.startsWith(section === 'rw' ? 'rw_' : 'math_')
+        ? explicitModuleId
+        : section === 'rw'
+        ? 'rw_1'
+        : 'math_1';
 
-    if (resolvedModuleId === 'rw_1' || resolvedModuleId === 'math_1') {
-      resolvedVariant = undefined;
-    }
+    const initialVariant: QuestionVariant | undefined =
+      initialModuleId.endsWith('_2') &&
+      (explicitVariant === 'easy' || explicitVariant === 'hard')
+        ? explicitVariant
+        : undefined;
 
     const rawDifficulty =
       obj.difficulty !== undefined &&
@@ -601,13 +1029,11 @@ export function parseQuestionImport(
       return;
     }
 
-    const defaultDomain = resolvedModuleId.startsWith('rw_')
-      ? 'Craft and Structure'
-      : 'Algebra';
+    const defaultDomain = section === 'rw' ? 'Craft and Structure' : 'Algebra';
 
     const candidate: Partial<SATQuestion> = normalizeQuestionInput({
-      moduleId: resolvedModuleId,
-      variant: resolvedVariant,
+      moduleId: initialModuleId,
+      variant: initialVariant,
       scored: rawScored,
       type: inferredType,
       domain: obj.domain ? String(obj.domain) : defaultDomain,
@@ -630,46 +1056,58 @@ export function parseQuestionImport(
       return;
     }
 
-    items.push({
-      moduleId: candidate.moduleId!,
-      variant: candidate.variant,
-      scored: candidate.scored !== false,
-      type: candidate.type!,
-      domain: candidate.domain,
-      skill: candidate.skill,
-      difficulty: candidate.difficulty,
-      b: candidate.b,
-      passage: candidate.passage,
-      prompt: candidate.prompt!,
-      mathEquation: candidate.mathEquation,
-      options: candidate.options,
-      correctAnswer: candidate.correctAnswer!,
-      explanation: candidate.explanation,
+    parsedEntries.push({
+      item: {
+        moduleId: candidate.moduleId!,
+        variant: candidate.variant,
+        scored: candidate.scored !== false,
+        type: candidate.type!,
+        domain: candidate.domain,
+        skill: candidate.skill,
+        difficulty: candidate.difficulty,
+        b: candidate.b,
+        passage: candidate.passage,
+        prompt: candidate.prompt!,
+        mathEquation: candidate.mathEquation,
+        options: candidate.options,
+        correctAnswer: candidate.correctAnswer!,
+        explanation: candidate.explanation,
+      },
+      originalIndex: idx,
+      section,
+      explicitModuleId,
+      explicitVariant,
     });
   });
 
-  // Auto-balance if user selected auto/rw_auto/math_auto and all questions of a section landed in M1 while M2 is empty
-  if (
-    autoBalance &&
-    (targetPlacement === 'auto' ||
-      targetPlacement === 'rw_auto' ||
-      targetPlacement === 'math_auto')
-  ) {
-    const rw1Items = items.filter((q) => q.moduleId === 'rw_1');
-    const rw2Items = items.filter((q) => q.moduleId === 'rw_2');
-    if (rw1Items.length >= 2 && rw2Items.length === 0) {
-      rw1Items.forEach((q, idx) => {
-        q.moduleId = idx % 2 === 0 ? 'rw_1' : 'rw_2';
-      });
-    }
+  // Distribute RW and Math questions into Module 1 and Module 2 (Easy/Hard) based on difficulty and position
+  const rwEntries = parsedEntries.filter((e) => e.section === 'rw');
+  const mathEntries = parsedEntries.filter((e) => e.section === 'math');
 
-    const m1Items = items.filter((q) => q.moduleId === 'math_1');
-    const m2Items = items.filter((q) => q.moduleId === 'math_2');
-    if (m1Items.length >= 2 && m2Items.length === 0) {
-      m1Items.forEach((q, idx) => {
-        q.moduleId = idx % 2 === 0 ? 'math_1' : 'math_2';
-      });
-    }
+  distributeSectionEntriesByDifficultyAndPosition(
+    rwEntries,
+    'rw',
+    targetPlacement,
+    autoBalance
+  );
+  distributeSectionEntriesByDifficultyAndPosition(
+    mathEntries,
+    'math',
+    targetPlacement,
+    autoBalance
+  );
+
+  // Order final items cleanly by module order, variant, difficulty, and position
+  const orderedEntries = [...rwEntries, ...mathEntries].sort(
+    (a, b) =>
+      MODULE_ORDER.indexOf(a.item.moduleId) - MODULE_ORDER.indexOf(b.item.moduleId) ||
+      (a.item.variant || '').localeCompare(b.item.variant || '') ||
+      getDifficultyNumericRank(a.item) - getDifficultyNumericRank(b.item) ||
+      a.originalIndex - b.originalIndex
+  );
+
+  for (const entry of orderedEntries) {
+    items.push(entry.item);
   }
 
   let missingDifficultyCount = 0;
@@ -692,24 +1130,32 @@ export function parseQuestionImport(
     }
   }
 
-  // Validate per-(module, variant) counts and pretest counts
+  // Validate per-(module, variant) counts and pretest counts as non-blocking warnings
   for (const [gKey, stat] of Object.entries(groupCounts)) {
     const label = formatModuleVariantLabel(gKey);
+    const isRw2Sub = gKey.startsWith('rw_2:');
+    const isMath2Sub = gKey.startsWith('math_2:');
+    const parentM2Total = isRw2Sub
+      ? counts.rw_2
+      : isMath2Sub
+      ? counts.math_2
+      : stat.total;
+
     if (stat.total > stat.max) {
-      errors.push(
-        `${label} guruhida ruxsat etilgan ${stat.max} tadan ko‘p savol kiritilgan (${stat.total} ta).`
+      warnings.push(
+        `${label} guruhida ${stat.total} ta savol kiritildi (har bir o‘quvchiga shundan ${stat.max} tasi tasodifiy tanlab beriladi).`
       );
-    } else if (stat.total < stat.max) {
+    } else if (stat.total < stat.max && parentM2Total < stat.max) {
       warnings.push(
         `${label}: ${stat.total} / ${stat.max} ta savol kiritildi (standart modul uchun ${stat.max} ta tavsiya etiladi).`
       );
     }
 
     if (stat.pretest > 2) {
-      errors.push(
-        `${label} guruhida sinov (scored=false) savollari 2 tadan oshmasligi kerak (${stat.pretest} ta kiritilgan).`
+      warnings.push(
+        `${label} guruhida sinov (scored=false) savollari ${stat.pretest} ta (standart SAT modulida 2 ta sinov savoli bo‘ladi).`
       );
-    } else if (stat.pretest < 2) {
+    } else if (stat.pretest < 2 && !(isRw2Sub || isMath2Sub)) {
       warnings.push(
         `${label}: sinov (scored=false) savollari ${stat.pretest} ta (standart SAT modulida 2 ta sinov savoli bo‘ladi).`
       );

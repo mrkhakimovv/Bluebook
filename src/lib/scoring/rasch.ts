@@ -189,15 +189,35 @@ export function selectStage2Questions(
   let usedFallback = false;
   let fallbackType: 'none' | 'common_only' | 'opposite_variant' = 'none';
 
+  const maxCount = moduleId === 'rw_2' ? 27 : 22;
+
   if (exactVariantQs.length > 0) {
     // Combine exact variant + common questions, sorted by number
     chosen = modAll.filter((q) => q.variant === targetVariant || !q.variant);
+    // If total M2 pool was split between easy and hard (e.g. 27 M2 questions split into 13 easy + 14 hard),
+    // top up to maxCount using the remaining M2 questions ordered by closest difficulty to targetVariant.
+    if (chosen.length < maxCount && oppositeQs.length > 0) {
+      const sortedOpposite = [...oppositeQs].sort((a, b) => {
+        const diffA = itemDifficulty(a);
+        const diffB = itemDifficulty(b);
+        if (targetVariant === 'easy') {
+          return diffA - diffB || a.number - b.number;
+        }
+        return diffB - diffA || a.number - b.number;
+      });
+      const needed = maxCount - chosen.length;
+      chosen = [...chosen, ...sortedOpposite.slice(0, needed)];
+    }
   } else if (commonQs.length > 0) {
     // Fallback 1: no specific variant questions, use common (variantless) questions
     chosen = commonQs;
     if (oppositeQs.length > 0) {
       usedFallback = true;
       fallbackType = 'common_only';
+      if (chosen.length < maxCount) {
+        const needed = maxCount - chosen.length;
+        chosen = [...chosen, ...oppositeQs.slice(0, needed)];
+      }
     }
   } else {
     // Fallback 2: use opposite variant so exam never freezes on an empty module
@@ -206,7 +226,6 @@ export function selectStage2Questions(
     fallbackType = 'opposite_variant';
   }
 
-  const maxCount = moduleId === 'rw_2' ? 27 : 22;
   const sliced = chosen.slice(0, maxCount).map((q, idx) => ({
     ...q,
     number: idx + 1,

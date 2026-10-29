@@ -1,4 +1,5 @@
 import { SATQuestion, SATScoreReport, ModuleId, MODULE_ORDER } from '../types/sat';
+import { toDeterministicSevenCharId } from '../utils/questionValidation';
 
 const RW_MOD1_BASE: Omit<SATQuestion, 'id' | 'moduleId' | 'number'>[] = [
   {
@@ -893,6 +894,7 @@ while (MATH_MOD2_BASE.length < 22) {
 
 export function generateDefaultQuestions(): SATQuestion[] {
   const questions: SATQuestion[] = [];
+  const usedIds = new Set<string>();
   const diffs: ('easy' | 'medium' | 'hard')[] = ['easy', 'medium', 'hard'];
 
   // RW Module 1: 27 questions (25 scored, 2 pretest at #10 and #22)
@@ -901,7 +903,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 10 || num === 22;
     questions.push({
       ...q,
-      id: `rw_1_q${num}`,
+      id: toDeterministicSevenCharId(`rw_1_q${num}`, usedIds),
       moduleId: 'rw_1',
       number: num,
       scored: !isPretest,
@@ -915,7 +917,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 9 || num === 21;
     questions.push({
       ...q,
-      id: `rw_2_easy_q${num}`,
+      id: toDeterministicSevenCharId(`rw_2_easy_q${num}`, usedIds),
       moduleId: 'rw_2',
       variant: 'easy',
       number: num,
@@ -930,7 +932,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 11 || num === 23;
     questions.push({
       ...q,
-      id: `rw_2_hard_q${num}`,
+      id: toDeterministicSevenCharId(`rw_2_hard_q${num}`, usedIds),
       moduleId: 'rw_2',
       variant: 'hard',
       number: num,
@@ -945,7 +947,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 8 || num === 19;
     questions.push({
       ...q,
-      id: `math_1_q${num}`,
+      id: toDeterministicSevenCharId(`math_1_q${num}`, usedIds),
       moduleId: 'math_1',
       number: num,
       scored: !isPretest,
@@ -959,7 +961,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 7 || num === 18;
     questions.push({
       ...q,
-      id: `math_2_easy_q${num}`,
+      id: toDeterministicSevenCharId(`math_2_easy_q${num}`, usedIds),
       moduleId: 'math_2',
       variant: 'easy',
       number: num,
@@ -974,7 +976,7 @@ export function generateDefaultQuestions(): SATQuestion[] {
     const isPretest = num === 9 || num === 20;
     questions.push({
       ...q,
-      id: `math_2_hard_q${num}`,
+      id: toDeterministicSevenCharId(`math_2_hard_q${num}`, usedIds),
       moduleId: 'math_2',
       variant: 'hard',
       number: num,

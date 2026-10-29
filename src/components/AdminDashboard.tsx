@@ -67,6 +67,7 @@ interface AdminDashboardProps {
     items: Omit<SATQuestion, 'id' | 'number'>[],
     mode: 'replace_all' | 'append'
   ) => Promise<void>;
+  onRedistributeSectionQuestions?: (section: 'rw' | 'math') => Promise<void>;
   onSaveScoringConfig: (
     cfg: Omit<ScoringConfig, 'version' | 'updatedAt'>
   ) => Promise<void>;
@@ -88,6 +89,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onAddQuestion,
   onDeleteQuestion,
   onImportQuestions,
+  onRedistributeSectionQuestions,
   onSaveScoringConfig,
   onRecalculateAllSessions,
   onImportItemParams,
@@ -139,6 +141,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [importCheckResult, setImportCheckResult] = useState<QuestionImportResult | null>(null);
   const [importActionError, setImportActionError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isRedistributing, setIsRedistributing] = useState(false);
 
   // Scoring Tab State
   const [cfgArw, setCfgArw] = useState<number>(scoringConfig.A_rw);
@@ -764,6 +767,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         parseQuestionImport(content, {
           targetPlacement: importPlacement,
           autoBalanceModules: true,
+          fallbackSection: selectedSection,
         })
       );
       setImportActionError(null);
@@ -777,6 +781,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       parseQuestionImport(importJsonText, {
         targetPlacement: importPlacement,
         autoBalanceModules: true,
+        fallbackSection: selectedSection,
       })
     );
   };
@@ -785,6 +790,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const res = parseQuestionImport(importJsonText, {
       targetPlacement: importPlacement,
       autoBalanceModules: true,
+      fallbackSection: selectedSection,
     });
     setImportCheckResult(res);
     if (res.errors.length > 0 || res.items.length === 0) return;
@@ -805,6 +811,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setImportActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleTriggerRedistributeSection = async (sec: 'rw' | 'math') => {
+    if (!onRedistributeSectionQuestions) return;
+    setIsRedistributing(true);
+    try {
+      await onRedistributeSectionQuestions(sec);
+    } finally {
+      setIsRedistributing(false);
     }
   };
 
@@ -982,7 +998,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('results')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'results'
-                ? 'text-slate-900 font-bold border-b-2 border-[#1b4332]'
+                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
             }`}
           >
@@ -992,7 +1008,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('questions')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'questions'
-                ? 'text-slate-900 font-bold border-b-2 border-[#1b4332]'
+                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
             }`}
           >
@@ -1002,7 +1018,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             onClick={() => setActiveTab('scoring')}
             className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
               activeTab === 'scoring'
-                ? 'text-slate-900 font-bold border-b-2 border-[#1b4332]'
+                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
                 : 'hover:text-slate-900'
             }`}
           >
@@ -1038,7 +1054,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-1">
                 <span className="text-xs font-medium text-slate-500">Hozir Topshirmoqda</span>
-                <div className="text-3xl font-bold text-[#1b4332] tabular-nums">
+                <div className="text-3xl font-bold text-[#2563eb] tabular-nums">
                   {activeStudents}
                 </div>
                 <p className="text-xs text-slate-500">Real vaqtda faol sessiyalar</p>
@@ -1078,7 +1094,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Ism-familiya yoki parol bo‘yicha qidirish..."
-                      className="w-full pl-10 pr-4 py-2 text-xs rounded-lg border border-slate-300 focus:border-[#1b4332] focus:outline-none text-slate-900"
+                      className="w-full pl-10 pr-4 py-2 text-xs rounded-lg border border-slate-300 focus:border-[#2563eb] focus:outline-none text-slate-900"
                     />
                   </div>
 
@@ -1252,7 +1268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </td>
                             <td className="py-3.5 px-4 font-mono tabular-nums">
                               {bothDone ? (
-                                <span className="text-base font-bold text-[#1b4332]">
+                                <span className="text-base font-bold text-[#2563eb]">
                                   {eff.total}
                                 </span>
                               ) : (
@@ -1303,7 +1319,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => handleSelectSection('rw')}
                 className={`min-w-[240px] px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
                   selectedSection === 'rw'
-                    ? 'bg-[#1b4332] text-white border-[#1b4332] shadow-md'
+                    ? 'bg-[#2563eb] text-white border-[#2563eb] shadow-md'
                     : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
@@ -1327,7 +1343,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => handleSelectSection('math')}
                 className={`min-w-[240px] px-6 py-3.5 rounded-xl border text-sm font-bold transition-all flex items-center justify-between gap-4 cursor-pointer ${
                   selectedSection === 'math'
-                    ? 'bg-[#1b4332] text-white border-[#1b4332] shadow-md'
+                    ? 'bg-[#2563eb] text-white border-[#2563eb] shadow-md'
                     : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
@@ -1380,7 +1396,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span
                         className={`px-2 py-0.5 rounded text-[11px] tabular-nums ${
                           selectedSubModuleNumber === 1
-                            ? 'bg-[#1b4332] text-white'
+                            ? 'bg-[#2563eb] text-white'
                             : 'bg-slate-200/80 text-slate-700'
                         }`}
                       >
@@ -1401,7 +1417,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span
                         className={`px-2 py-0.5 rounded text-[11px] tabular-nums ${
                           selectedSubModuleNumber === 2
-                            ? 'bg-[#1b4332] text-white'
+                            ? 'bg-[#2563eb] text-white'
                             : 'bg-slate-200/80 text-slate-700'
                         }`}
                       >
@@ -1437,7 +1453,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  {onRedistributeSectionQuestions &&
+                    ((selectedSection === 'rw' && rwTotalCount >= 2) ||
+                      (selectedSection === 'math' && mathTotalCount >= 2)) && (
+                      <button
+                        type="button"
+                        disabled={isRedistributing}
+                        onClick={() => handleTriggerRedistributeSection(selectedSection)}
+                        className="px-3.5 py-2 rounded-lg border border-blue-200 bg-blue-50/70 text-[#2563eb] text-xs font-bold hover:bg-blue-100/80 flex items-center gap-1.5 whitespace-nowrap cursor-pointer disabled:opacity-50"
+                        title="Savollarni qiyinchilik darajasi va joylashuviga qarab M1 va M2 (Easy/Hard) modullariga avtomatik ajratish"
+                      >
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${isRedistributing ? 'animate-spin' : ''}`}
+                        />
+                        <span>
+                          {isRedistributing
+                            ? 'Taqsimlanmoqda...'
+                            : 'M1 va M2 ga avtomatik ajratish'}
+                        </span>
+                      </button>
+                    )}
+
                   <button
                     onClick={() => {
                       setImportJsonText('');
@@ -1451,7 +1488,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           `${selectedModuleFilter}_${selectedVariantFilter}` as ImportPlacementTarget
                         );
                       } else {
-                        setImportPlacement(selectedModuleFilter);
+                        setImportPlacement(
+                          selectedSection === 'rw' ? 'rw_auto' : 'math_auto'
+                        );
                       }
                       setIsImportModalOpen(true);
                     }}
@@ -1463,7 +1502,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   <button
                     onClick={() => openCreateModal(selectedModuleFilter)}
-                    className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold hover:bg-[#143325] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                    className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>Yangi Savol Qo‘shish</span>
@@ -1600,7 +1639,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setImportJsonText('');
                         setImportCheckResult(null);
                         setImportActionError(null);
-                        setImportPlacement(selectedModuleFilter);
+                        setImportPlacement(
+                          selectedSection === 'rw' ? 'rw_auto' : 'math_auto'
+                        );
                         setIsImportModalOpen(true);
                       }}
                       className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
@@ -1611,7 +1652,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => openCreateModal(selectedModuleFilter)}
-                      className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold hover:bg-[#143325] flex items-center gap-1.5 cursor-pointer"
+                      className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Yangi Savol Qo‘shish</span>
@@ -1631,6 +1672,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="w-7 h-7 rounded bg-slate-900 text-white text-xs font-bold flex items-center justify-center">
                               {q.number}
+                            </span>
+
+                            <span
+                              className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono text-[11px] font-bold tracking-wide select-all"
+                              title="Savolning 7 belgili unikal ID kodi"
+                            >
+                              ID: {q.id}
                             </span>
 
                             {q.moduleId.endsWith('_2') && (
@@ -1669,7 +1717,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               {typeof q.b === 'number' ? ' (kalibrlangan)' : ''}
                             </span>
 
-                            <span className="text-xs text-[#1b4332] font-bold">
+                            <span className="text-xs text-[#2563eb] font-bold">
                               To‘g‘ri javob: {q.correctAnswer}
                             </span>
                           </div>
@@ -1967,7 +2015,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="submit"
                     disabled={isSavingConfig}
-                    className="px-5 py-2.5 rounded-lg bg-[#1b4332] text-white text-xs font-bold hover:bg-[#143325] flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                    className="px-5 py-2.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                   >
                     <Save className="w-3.5 h-3.5" />
                     <span>
@@ -2009,7 +2057,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       setItemParamFeedback(null);
                       setIsItemParamModalOpen(true);
                     }}
-                    className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold hover:bg-[#143325] flex items-center gap-1.5 cursor-pointer"
+                    className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 cursor-pointer"
                   >
                     <FileJson className="w-3.5 h-3.5" />
                     <span>Item parametrlarini import qilish</span>
@@ -2298,7 +2346,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </span>
                               )}
                             </h4>
-                            <span className="text-xs font-semibold text-[#1b4332] tabular-nums">
+                            <span className="text-xs font-semibold text-[#2563eb] tabular-nums">
                               Hisoblangan to‘g‘ri: {scoredCorrect} / {scoredQs.length} (Jami:{' '}
                               {modQs.length})
                             </span>
@@ -2357,10 +2405,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900">
-                Savol #{editingQuestion.number} ni tahrirlash (
-                {MODULE_CONFIGS[editingQuestion.moduleId].shortTitle})
-              </h3>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h3 className="text-base font-bold text-slate-900">
+                  Savol #{editingQuestion.number} ni tahrirlash (
+                  {MODULE_CONFIGS[editingQuestion.moduleId].shortTitle})
+                </h3>
+                <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-mono text-xs font-bold select-all">
+                  ID: {editingQuestion.id}
+                </span>
+              </div>
               <button
                 onClick={() => setEditingQuestion(null)}
                 className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
@@ -2537,7 +2590,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           scored: e.target.checked,
                         })
                       }
-                      className="rounded border-slate-300 text-[#1b4332] focus:ring-[#1b4332]"
+                      className="rounded border-slate-300 text-[#2563eb] focus:ring-[#2563eb]"
                     />
                     <span className="font-semibold text-slate-800">
                       Ballga kiradi (scored savol; o‘chirilsa — sinov/pretest)
@@ -2559,7 +2612,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setEditingQuestion({ ...editingQuestion, passage: e.target.value })
                   }
-                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#1b4332] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#2563eb] focus:outline-none"
                 />
               </div>
 
@@ -2576,7 +2629,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   onChange={(e) =>
                     setEditingQuestion({ ...editingQuestion, prompt: e.target.value })
                   }
-                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#1b4332] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#2563eb] focus:outline-none"
                 />
               </div>
 
@@ -2640,7 +2693,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     })
                   }
                   placeholder="Yechim izohi..."
-                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#1b4332] focus:outline-none"
+                  className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#2563eb] focus:outline-none"
                 />
               </div>
             </div>
@@ -2655,7 +2708,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 disabled={isSavingQuestion}
                 onClick={handleSaveEditedQuestion}
-                className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 <Save className="w-3.5 h-3.5" />
                 <span>{isSavingQuestion ? 'Saqlanmoqda...' : 'Saqlash'}</span>
@@ -2807,7 +2860,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="checkbox"
                       checked={newQScored}
                       onChange={(e) => setNewQScored(e.target.checked)}
-                      className="rounded border-slate-300 text-[#1b4332] focus:ring-[#1b4332]"
+                      className="rounded border-slate-300 text-[#2563eb] focus:ring-[#2563eb]"
                     />
                     <span className="font-semibold text-slate-800">
                       Ballga kiradi (scored savol; o‘chirilsa — sinov/pretest)
@@ -2941,7 +2994,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 type="submit"
                 disabled={isSavingQuestion}
-                className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
+                className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
               >
                 {isSavingQuestion ? 'Saqlanmoqda...' : 'Qo‘shish'}
               </button>
@@ -2987,6 +3040,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           parseQuestionImport(importJsonText, {
                             targetPlacement: val,
                             autoBalanceModules: true,
+                            fallbackSection: selectedSection,
                           })
                         );
                       }
@@ -2994,22 +3048,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs font-medium"
                   >
                     <option value="auto">
-                      JSON ichidagi moduleId / variant bo‘yicha (Avtomatik)
+                      Avtomatik (moduleId, qiyinlik darajasi va joylashuv bo‘yicha)
+                    </option>
+                    <option value="rw_auto">
+                      Reading & Writing — Qiyinlik va joylashuv bo‘yicha M1 va M2 ga ajratish
                     </option>
                     <option value="rw_1">Reading & Writing — M1</option>
                     <option value="rw_2">Reading & Writing — M2 (Umumiy)</option>
                     <option value="rw_2_easy">Reading & Writing — M2 (Easy)</option>
                     <option value="rw_2_hard">Reading & Writing — M2 (Hard)</option>
-                    <option value="rw_auto">
-                      Reading & Writing — M1 va M2 ga teng taqsimlash
+                    <option value="math_auto">
+                      Math — Qiyinlik va joylashuv bo‘yicha M1 va M2 ga ajratish
                     </option>
                     <option value="math_1">Math — M1</option>
                     <option value="math_2">Math — M2 (Umumiy)</option>
                     <option value="math_2_easy">Math — M2 (Easy)</option>
                     <option value="math_2_hard">Math — M2 (Hard)</option>
-                    <option value="math_auto">
-                      Math — M1 va M2 ga teng taqsimlash
-                    </option>
                   </select>
                 </div>
 
@@ -3050,12 +3104,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 rows={10}
                 value={importJsonText}
                 onChange={(e) => {
-                  setImportJsonText(e.target.value);
-                  setImportCheckResult(null);
+                  const val = e.target.value;
+                  setImportJsonText(val);
                   setImportActionError(null);
+                  if (val.trim()) {
+                    setImportCheckResult(
+                      parseQuestionImport(val, {
+                        targetPlacement: importPlacement,
+                        autoBalanceModules: true,
+                        fallbackSection: selectedSection,
+                      })
+                    );
+                  } else {
+                    setImportCheckResult(null);
+                  }
                 }}
                 placeholder='[{"moduleId": "rw_2", "variant": "hard", "scored": true, "difficulty": "hard", "prompt": "...", "options": {"A": "...", "B": "...", "C": "...", "D": "..."}, "correctAnswer": "A"}]'
-                className="w-full rounded-lg border border-slate-300 p-3 font-mono text-xs focus:border-[#1b4332] focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 p-3 font-mono text-xs focus:border-[#2563eb] focus:outline-none"
               />
 
               {importActionError && (
@@ -3136,7 +3201,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     importCheckResult.errors.length > 0
                   }
                   onClick={handleExecuteImport}
-                  className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
+                  className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
                 >
                   {isImporting ? 'Import qilinmoqda...' : 'Import qilish'}
                 </button>
@@ -3188,7 +3253,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setItemParamFeedback(null);
                 }}
                 placeholder='{"calibratedAt": 1761650000000, "items": [{"id": "rw_1_q1", "b": -0.842, "bSE": 0.145, "infit": 0.98, "outfit": 1.02}]}'
-                className="w-full rounded-lg border border-slate-300 p-3 font-mono text-xs focus:border-[#1b4332] focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 p-3 font-mono text-xs focus:border-[#2563eb] focus:outline-none"
               />
 
               {itemParamFeedback && (
@@ -3216,7 +3281,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 disabled={isImportingItemParams}
                 onClick={handleExecuteImportItemParams}
-                className="px-4 py-2 rounded-lg bg-[#1b4332] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
+                className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
               >
                 {isImportingItemParams ? 'Saqlanmoqda...' : 'Parametrlarni saqlash'}
               </button>

@@ -32,6 +32,10 @@ import {
   getSessionVariantQuestions,
   getActiveModulesForQuestions,
   getModuleVariantKey,
+  isSevenCharQuestionId,
+  toDeterministicSevenCharId,
+  generateSevenCharQuestionId,
+  redistributeQuestionsByDifficultyAndPosition,
 } from './utils/questionValidation';
 import { LoginView } from './components/LoginView';
 import { BluebookExamView } from './components/BluebookExamView';
@@ -97,15 +101,61 @@ export default function App() {
   const roleRef = useRef<'guest' | 'student' | 'admin'>(role);
   roleRef.current = role;
 
+  const migratingIdsRef = useRef<Set<string>>(new Set());
+
+  // Remaps any legacy non-7-character question ID keys inside a session's answers/flagged/eliminated/highlights
+  const normalizeSessionQuestionIds = useCallback((s: StudentSession): StudentSession => {
+    let changed = false;
+    const nextAnswers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(s.answers || {})) {
+      const nk = isSevenCharQuestionId(k) ? k : toDeterministicSevenCharId(k);
+      if (nk !== k) changed = true;
+      nextAnswers[nk] = v;
+    }
+
+    const nextFlagged: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(s.flagged || {})) {
+      const nk = isSevenCharQuestionId(k) ? k : toDeterministicSevenCharId(k);
+      if (nk !== k) changed = true;
+      nextFlagged[nk] = v;
+    }
+
+    const nextEliminated: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(s.eliminated || {})) {
+      const nk = isSevenCharQuestionId(k) ? k : toDeterministicSevenCharId(k);
+      if (nk !== k) changed = true;
+      nextEliminated[nk] = v;
+    }
+
+    const nextHighlights = (s.highlights || []).map((h) => {
+      if (isSevenCharQuestionId(h.questionId)) return h;
+      changed = true;
+      return {
+        ...h,
+        questionId: toDeterministicSevenCharId(h.questionId),
+      };
+    });
+
+    if (!changed) return s;
+    return {
+      ...s,
+      answers: nextAnswers,
+      flagged: nextFlagged,
+      eliminated: nextEliminated,
+      highlights: nextHighlights,
+    };
+  }, []);
+
   // Sync with Firebase Firestore (wissenapk1) in real time
   useEffect(() => {
     const unsubSessions = subscribeToSessions((firestoreSessions) => {
       setSessions((prev) => {
         const mergedMap = new Map<string, StudentSession>();
         for (const s of prev) {
-          mergedMap.set(s.id, s);
+          mergedMap.set(s.id, normalizeSessionQuestionIds(s));
         }
-        for (const fs of firestoreSessions) {
+        for (const rawFs of firestoreSessions) {
+          const fs = normalizeSessionQuestionIds(rawFs);
           const existingLocal = mergedMap.get(fs.id);
           if (
             roleRef.current === 'student' &&
@@ -129,13 +179,45 @@ export default function App() {
     });
 
     const unsubQuestions = subscribeToQuestions((firestoreQuestions) => {
+      const usedIds = new Set<string>();
       const map = new Map<string, SATQuestion>();
+      const toMigrateSave: SATQuestion[] = [];
+      const toMigrateRemove: string[] = [];
+
+      // First pass: register already-valid 7-char IDs
       for (const q of firestoreQuestions) {
-        if (q && q.id) {
-          map.set(q.id, q);
+        if (q && q.id && isSevenCharQuestionId(q.id)) {
+          usedIds.add(q.id);
         }
       }
+
+      // Second pass: normalize all questions to 7-char IDs
+      for (const q of firestoreQuestions) {
+        if (!q || !q.id) continue;
+        if (isSevenCharQuestionId(q.id)) {
+          map.set(q.id, q);
+        } else {
+          const newId = toDeterministicSevenCharId(q.id, usedIds);
+          const migratedQ: SATQuestion = {
+            ...q,
+            id: newId,
+          };
+          map.set(newId, migratedQ);
+          if (!migratingIdsRef.current.has(q.id)) {
+            migratingIdsRef.current.add(q.id);
+            toMigrateSave.push(migratedQ);
+            toMigrateRemove.push(q.id);
+          }
+        }
+      }
+
       setFsQuestions(Array.from(map.values()));
+
+      if (toMigrateSave.length > 0) {
+        applyQuestionChanges(toMigrateSave, toMigrateRemove).catch((err) =>
+          console.error('Error migrating question IDs to 7-char format:', err)
+        );
+      }
     });
 
     const unsubScoringConfig = subscribeToScoringConfig((cfg) => {
@@ -147,7 +229,7 @@ export default function App() {
       unsubQuestions();
       unsubScoringConfig();
     };
-  }, []);
+  }, [normalizeSessionQuestionIds]);
 
   // Load initial sessions state from server
   const fetchState = useCallback(async () => {
@@ -479,14 +561,15 @@ export default function App() {
     const modId = normalized.moduleId;
     const groupKey = getModuleVariantKey(modId, normalized.variant);
     const hasAnyFs = fsQuestionsRef.current.length > 0;
-    const currentGroupQuestions = (hasAnyFs ? fsQuestionsRef.current : questionsRef.current)
+    const allCurrentQuestions = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
+    const currentGroupQuestions = allCurrentQuestions
       .filter((q) => getModuleVariantKey(q.moduleId, q.variant) === groupKey)
       .sort((a, b) => a.number - b.number);
 
-    const varPrefix = normalized.variant ? `_${normalized.variant}` : '';
+    const usedIds = new Set<string>(allCurrentQuestions.map((q) => q.id));
     const created: SATQuestion = {
       ...normalized,
-      id: `${modId}${varPrefix}_q_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: generateSevenCharQuestionId(usedIds),
       number: currentGroupQuestions.length + 1,
     };
 
@@ -566,16 +649,36 @@ export default function App() {
     const removeIds: string[] = [];
 
     if (mode === 'replace_all') {
+      const replaceGroupKeys = new Set<string>(byGroup.keys());
+      // If replacing both easy & hard variants of a Stage 2 module (or M1 + M2), also clear un-split common M2 questions
+      if (
+        (replaceGroupKeys.has('rw_2:easy') && replaceGroupKeys.has('rw_2:hard')) ||
+        (replaceGroupKeys.has('rw_1') &&
+          (replaceGroupKeys.has('rw_2:easy') || replaceGroupKeys.has('rw_2:hard')))
+      ) {
+        replaceGroupKeys.add('rw_2');
+      }
+      if (
+        (replaceGroupKeys.has('math_2:easy') && replaceGroupKeys.has('math_2:hard')) ||
+        (replaceGroupKeys.has('math_1') &&
+          (replaceGroupKeys.has('math_2:easy') || replaceGroupKeys.has('math_2:hard')))
+      ) {
+        replaceGroupKeys.add('math_2');
+      }
+
       const existingInImportedGroups = fsQuestionsRef.current.filter((q) =>
-        byGroup.has(getModuleVariantKey(q.moduleId, q.variant))
+        replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
       );
+      const keptQuestions = fsQuestionsRef.current.filter(
+        (q) => !replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
+      );
+      const usedIds = new Set<string>(keptQuestions.map((q) => q.id));
 
       const newSavedIds = new Set<string>();
-      for (const [gKey, groupItems] of byGroup.entries()) {
-        const safePrefix = gKey.replace(':', '_');
+      for (const [, groupItems] of byGroup.entries()) {
         groupItems.forEach((item, idx) => {
           const num = idx + 1;
-          const id = `${safePrefix}_q${num}`;
+          const id = generateSevenCharQuestionId(usedIds);
           newSavedIds.add(id);
           toSave.push({
             ...item,
@@ -595,7 +698,7 @@ export default function App() {
       setFsQuestions((prev) => {
         const map = new Map<string, SATQuestion>();
         for (const q of prev) {
-          if (!byGroup.has(getModuleVariantKey(q.moduleId, q.variant))) {
+          if (!replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))) {
             map.set(q.id, q);
           }
         }
@@ -606,16 +709,14 @@ export default function App() {
       });
     } else {
       const baseExisting = fsQuestionsRef.current;
-      const stamp = Date.now();
+      const usedIds = new Set<string>(baseExisting.map((q) => q.id));
       for (const [gKey, groupItems] of byGroup.entries()) {
-        const safePrefix = gKey.replace(':', '_');
         const existingCount = baseExisting.filter(
           (q) => getModuleVariantKey(q.moduleId, q.variant) === gKey
         ).length;
         groupItems.forEach((item, idx) => {
           const num = existingCount + idx + 1;
-          const randSuffix = Math.random().toString(36).slice(2, 6);
-          const id = `${safePrefix}_q_${stamp}_${idx + 1}_${randSuffix}`;
+          const id = generateSevenCharQuestionId(usedIds);
           toSave.push({
             ...item,
             id,
@@ -632,6 +733,25 @@ export default function App() {
         return Array.from(map.values());
       });
     }
+  };
+
+  const handleRedistributeSectionQuestions = async (section: 'rw' | 'math') => {
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
+    const redistributed = redistributeQuestionsByDifficultyAndPosition(baseAll, section);
+    if (redistributed.length === 0) return;
+
+    const secPrefix = section === 'rw' ? 'rw_' : 'math_';
+    const otherSectionQuestions = baseAll.filter((q) => !q.moduleId.startsWith(secPrefix));
+    const toSave = hasAnyFs ? redistributed : [...otherSectionQuestions, ...redistributed];
+
+    await applyQuestionChanges(toSave, []);
+    setFsQuestions((prev) => {
+      const map = new Map<string, SATQuestion>();
+      for (const q of prev) map.set(q.id, q);
+      for (const q of toSave) map.set(q.id, q);
+      return Array.from(map.values());
+    });
   };
 
   const handleSaveScoringConfig = async (
@@ -742,6 +862,7 @@ export default function App() {
         onAddQuestion={handleAddQuestion}
         onDeleteQuestion={handleDeleteQuestion}
         onImportQuestions={handleImportQuestions}
+        onRedistributeSectionQuestions={handleRedistributeSectionQuestions}
         onSaveScoringConfig={handleSaveScoringConfig}
         onRecalculateAllSessions={handleRecalculateAllSessions}
         onImportItemParams={handleImportItemParams}

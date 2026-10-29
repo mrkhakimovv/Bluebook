@@ -52,3 +52,38 @@ export function renderSATTextWithMath(text: string, isPureMathOption = false): s
 
   return text;
 }
+
+/**
+ * Renders the Student-Produced Response (SPR) Answer Preview using KaTeX.
+ * Automatically formats fractions (e.g. "7/2", "-1/3") as vertical stacked fractions.
+ */
+export function renderSprAnswerPreview(rawAnswer: string): string {
+  const trimmed = (rawAnswer || '').trim();
+  if (!trimmed) return '';
+
+  // Match fraction pattern: optional leading '-', numerator digits/decimal, '/', denominator digits/decimal
+  const fracMatch = trimmed.match(/^(-?)([0-9.]*)\/([0-9.]*)$/);
+  if (fracMatch) {
+    const sign = fracMatch[1] || '';
+    const num = fracMatch[2] || '\\phantom{0}';
+    const den = fracMatch[3] || '\\phantom{0}';
+    try {
+      return katex.renderToString(`${sign}\\frac{${num}}{${den}}`, {
+        throwOnError: false,
+        displayMode: false,
+      });
+    } catch {
+      return trimmed;
+    }
+  }
+
+  try {
+    return katex.renderToString(trimmed, {
+      throwOnError: false,
+      displayMode: false,
+    });
+  } catch {
+    return trimmed;
+  }
+}
+

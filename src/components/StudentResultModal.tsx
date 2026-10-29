@@ -111,7 +111,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-8 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Award className="w-6 h-6 text-[#1b4332]" />
+          <Award className="w-6 h-6 text-[#2563eb]" />
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-lg font-bold text-slate-900">
@@ -157,33 +157,33 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         {/* Top Score Summary Card */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Total Score */}
-          <div className="lg:col-span-5 bg-[#1b4332] text-white rounded-2xl p-7 flex flex-col justify-between">
+          <div className="lg:col-span-5 bg-[#2563eb] text-white rounded-2xl p-7 flex flex-col justify-between">
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <p className="text-xs uppercase tracking-wider text-emerald-200 font-semibold">
+                <p className="text-xs uppercase tracking-wider text-blue-100 font-semibold">
                   Jami SAT Natijasi (Taxminiy ball)
                 </p>
-                <span className="px-2 py-0.5 rounded bg-white/15 text-[11px] font-semibold text-emerald-100">
+                <span className="px-2 py-0.5 rounded bg-white/15 text-[11px] font-semibold text-blue-50">
                   400–1600 shkala
                 </span>
               </div>
               <div className="text-6xl font-bold tracking-tight tabular-nums pt-2">
                 {raschResult.total}
               </div>
-              <p className="text-xs text-emerald-200 pt-1">
+              <p className="text-xs text-blue-100 pt-1">
                 Hisoblanadigan savollar aniqligi: {accuracyPct}% ({totalRawScored} / {totalNScored} to‘g‘ri)
               </p>
             </div>
 
             <div className="pt-6 border-t border-white/15 grid grid-cols-2 gap-4 text-xs">
               <div>
-                <span className="text-emerald-200 block">Topshirilgan savollar</span>
+                <span className="text-blue-100 block">Topshirilgan savollar</span>
                 <span className="text-lg font-bold tabular-nums">
                   {session.score.totalAnswered} / {session.score.totalQuestions}
                 </span>
               </div>
               <div>
-                <span className="text-emerald-200 block">Imtihon holati</span>
+                <span className="text-blue-100 block">Imtihon holati</span>
                 <span className="text-lg font-bold">
                   {session.status === 'completed' ? 'Yakunlangan' : 'Jarayonda'}
                 </span>
@@ -199,7 +199,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     1-bo‘lim · Taxminiy ball
                   </span>
-                  <BookOpen className="w-4 h-4 text-[#1b4332]" />
+                  <BookOpen className="w-4 h-4 text-[#2563eb]" />
                 </div>
                 <h2 className="text-base font-bold text-slate-900">
                   Reading and Writing
@@ -238,7 +238,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                   <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                     2-bo‘lim · Taxminiy ball
                   </span>
-                  <Calculator className="w-4 h-4 text-[#1b4332]" />
+                  <Calculator className="w-4 h-4 text-[#2563eb]" />
                 </div>
                 <h2 className="text-base font-bold text-slate-900">
                   Mathematics
@@ -276,7 +276,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         {/* Domain Breakdown Table (Scored Questions Only) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5">
           <div className="flex items-center gap-2.5 border-b border-slate-200 pb-4">
-            <BarChart3 className="w-5 h-5 text-[#1b4332]" />
+            <BarChart3 className="w-5 h-5 text-[#2563eb]" />
             <div>
               <h3 className="text-base font-bold text-slate-900">
                 Yo‘nalishlar (Domain) bo‘yicha natijalar
@@ -320,7 +320,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                           <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700">
                             {stat.correct} / {stat.total}
                           </td>
-                          <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-[#1b4332]">
+                          <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-[#2563eb]">
                             {stat.total > 0 ? `${pct}%` : '—'}
                           </td>
                         </tr>
@@ -363,7 +363,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                           <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700">
                             {stat.correct} / {stat.total}
                           </td>
-                          <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-[#1b4332]">
+                          <td className="py-2.5 px-3.5 text-right font-mono tabular-nums font-bold text-[#2563eb]">
                             {stat.total > 0 ? `${pct}%` : '—'}
                           </td>
                         </tr>
