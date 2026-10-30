@@ -176,13 +176,15 @@ async function startServer() {
 
   // Login endpoint (checks 7788 for admin, otherwise creates/resumes student session)
   app.post('/api/auth/login', (req, res) => {
-    const { fullName, password, forceNew } = req.body as {
+    const { fullName, email, password, forceNew } = req.body as {
       fullName?: string;
+      email?: string;
       password?: string;
       forceNew?: boolean;
     };
 
     const cleanName = (fullName || '').trim();
+    const cleanEmail = (email || '').trim().toLowerCase();
     const cleanPass = (password || '').trim();
 
     if (!cleanPass) {
@@ -198,8 +200,8 @@ async function startServer() {
       return;
     }
 
-    if (!cleanName) {
-      res.status(400).json({ error: 'Iltimos, ism va familiyangizni kiriting.' });
+    if (!cleanName && !cleanEmail) {
+      res.status(400).json({ error: 'Iltimos, elektron pochta manzilini kiriting.' });
       return;
     }
 
@@ -207,7 +209,8 @@ async function startServer() {
     let session = !forceNew
       ? db.sessions.find(
           (s) =>
-            s.fullName.toLowerCase() === cleanName.toLowerCase() &&
+            ((cleanEmail && s.email && s.email.toLowerCase() === cleanEmail) ||
+              (cleanName && s.fullName.toLowerCase() === cleanName.toLowerCase())) &&
             s.password === cleanPass
         )
       : undefined;
@@ -216,7 +219,8 @@ async function startServer() {
       const now = new Date().toISOString();
       session = {
         id: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        fullName: cleanName,
+        fullName: cleanName || cleanEmail,
+        ...(cleanEmail ? { email: cleanEmail } : {}),
         password: cleanPass,
         status: 'in_progress',
         currentModule: 'rw_1',
@@ -241,6 +245,9 @@ async function startServer() {
       saveDatabase();
       broadcastUpdate();
     } else {
+      if (cleanEmail && !session.email) {
+        session.email = cleanEmail;
+      }
       session.updatedAt = new Date().toISOString();
       session.score = calculateSATScore(db.questions, session.answers);
       saveDatabase();

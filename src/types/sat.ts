@@ -166,6 +166,7 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 export interface StudentSession {
   id: string;
   fullName: string;
+  email?: string;
   password: string;
   status: 'in_progress' | 'break' | 'completed';
   currentModule: ModuleId;

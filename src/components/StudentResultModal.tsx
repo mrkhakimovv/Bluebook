@@ -34,6 +34,7 @@ interface StudentResultViewProps {
   scoringConfig?: ScoringConfig;
   onRestartExam: () => void;
   onReturnToExam?: () => void;
+  onReturnToDashboard?: () => void;
   onLogout: () => void;
 }
 
@@ -43,6 +44,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
   scoringConfig = DEFAULT_SCORING_CONFIG,
   onRestartExam,
   onReturnToExam,
+  onReturnToDashboard,
   onLogout,
 }) => {
   const activeModules = MODULE_ORDER.filter((m) =>
@@ -128,6 +130,14 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          {onReturnToDashboard && (
+            <button
+              onClick={onReturnToDashboard}
+              className="px-3.5 sm:px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+            >
+              Dashboardga qaytish
+            </button>
+          )}
           {onReturnToExam && session.status !== 'completed' && (
             <button
               onClick={onReturnToExam}

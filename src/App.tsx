@@ -40,10 +40,14 @@ import {
 import { LoginView } from './components/LoginView';
 import { BluebookExamView } from './components/BluebookExamView';
 import { StudentResultView } from './components/StudentResultModal';
+import { StudentDashboardView } from './components/StudentDashboardView';
 import { AdminDashboard } from './components/AdminDashboard';
 
 export default function App() {
   const [role, setRole] = useState<'guest' | 'student' | 'admin'>('guest');
+  const [studentScreen, setStudentScreen] = useState<
+    'dashboard' | 'exam' | 'results'
+  >('dashboard');
   const [adminName, setAdminName] = useState('Administrator');
   const defaultQuestions = useMemo(() => generateDefaultQuestions(), []);
   const [fsQuestions, setFsQuestions] = useState<SATQuestion[]>([]);
@@ -262,13 +266,14 @@ export default function App() {
   }, [questions, activeSession?.id]);
 
   const handleLogin = async (
-    fullName: string,
+    emailOrIdentifier: string,
     password: string,
     forceNew?: boolean
   ) => {
     setLoading(true);
     setLoginError(null);
-    const cleanName = fullName.trim();
+    const cleanIdentifier = emailOrIdentifier.trim();
+    const cleanEmail = cleanIdentifier.toLowerCase();
     const cleanPass = password.trim();
 
     if (!cleanPass) {
@@ -278,45 +283,58 @@ export default function App() {
     }
 
     if (cleanPass === '7788') {
-      setAdminName(cleanName || 'Administrator');
+      setAdminName(
+        cleanIdentifier && !cleanIdentifier.includes('@')
+          ? cleanIdentifier
+          : 'Administrator'
+      );
       setRole('admin');
       setLoading(false);
       return;
     }
 
-    if (!cleanName) {
-      setLoginError('Iltimos, ism va familiyangizni kiriting.');
+    if (!cleanIdentifier) {
+      setLoginError('Iltimos, elektron pochta manzilingizni kiriting.');
       setLoading(false);
       return;
     }
 
     try {
-      let targetSession = !forceNew
-        ? sessionsRef.current.find(
-            (s) =>
-              s.fullName.toLowerCase() === cleanName.toLowerCase() &&
-              s.password === cleanPass
-          )
-        : undefined;
+      // Match account by email first, or fallback to fullName for legacy sessions created before email support
+      const matchedAccount = sessionsRef.current.find(
+        (s) =>
+          (s.email && s.email.toLowerCase() === cleanEmail) ||
+          (!s.email && s.fullName.toLowerCase() === cleanEmail)
+      );
+
+      if (!matchedAccount) {
+        setLoginError(
+          'Ushbu elektron pochta manzili bilan akkaunt topilmadi. Avval «Ro‘yxatdan o‘tish» bo‘limi orqali akkaunt yarating.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      if (matchedAccount.password !== cleanPass) {
+        setLoginError('Elektron pochta manzili yoki parol noto‘g‘ri! Qaytadan tekshiring.');
+        setLoading(false);
+        return;
+      }
 
       const cfg = scoringConfigRef.current;
+      let targetSession: StudentSession;
 
-      if (!targetSession) {
+      if (forceNew) {
         const now = new Date().toISOString();
-        const sessionId = `sess_${Date.now()}_${Math.random()
-          .toString(36)
-          .slice(2, 7)}`;
         const variantQs = getSessionVariantQuestions(
           questionsRef.current,
-          sessionId
+          matchedAccount.id
         );
         const activeMods = getActiveModulesForQuestions(variantQs);
         const firstModule: ModuleId = activeMods[0] || 'rw_1';
 
         targetSession = {
-          id: sessionId,
-          fullName: cleanName,
-          password: cleanPass,
+          ...matchedAccount,
           status: 'in_progress',
           currentModule: firstModule,
           currentQuestionIndex: 0,
@@ -332,31 +350,35 @@ export default function App() {
             math_2: MODULE_CONFIGS.math_2.durationSeconds,
           },
           completedModules: [],
+          routing: undefined,
+          routingTheta: undefined,
+          result: undefined,
           startedAt: now,
           updatedAt: now,
+          completedAt: undefined,
           score: calculateSATScore(variantQs, {}, cfg),
         };
       } else {
         const variantQs = getSessionVariantQuestions(
           questionsRef.current,
-          targetSession.id
+          matchedAccount.id
         );
         const activeMods = getActiveModulesForQuestions(variantQs);
         const validCurrentModule = activeMods.includes(
-          targetSession.currentModule
+          matchedAccount.currentModule
         )
-          ? targetSession.currentModule
+          ? matchedAccount.currentModule
           : activeMods[0] || 'rw_1';
 
         targetSession = {
-          ...targetSession,
+          ...matchedAccount,
           currentModule: validCurrentModule,
           updatedAt: new Date().toISOString(),
           score: calculateSATScore(
             variantQs,
-            targetSession.answers || {},
+            matchedAccount.answers || {},
             cfg,
-            targetSession.routing
+            matchedAccount.routing
           ),
         };
       }
@@ -373,6 +395,7 @@ export default function App() {
       });
       setActiveSessionId(finalSession.id);
       setViewingResultEarly(false);
+      setStudentScreen('dashboard');
       setRole('student');
 
       await saveSessionToFirestore(finalSession);
@@ -381,13 +404,145 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fullName: cleanName,
+          fullName: finalSession.fullName,
+          email: finalSession.email,
           password: cleanPass,
           forceNew,
         }),
       }).catch(() => {});
     } catch {
       setLoginError('Ma’lumotlar bazasiga ulanishda xatolik yuz berdi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegisterAccount = async (
+    fullName: string,
+    email: string,
+    password: string,
+    startImmediately = false
+  ): Promise<{ ok: boolean; message?: string }> => {
+    setLoading(true);
+    setLoginError(null);
+    const cleanName = fullName.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
+
+    if (!cleanName || cleanName.length < 2) {
+      const msg = 'Iltimos, ism va familiyangizni to‘liq kiriting.';
+      setLoginError(msg);
+      setLoading(false);
+      return { ok: false, message: msg };
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      const msg = 'Iltimos, yaroqli elektron pochta manzilini kiriting (masalan: student@example.com).';
+      setLoginError(msg);
+      setLoading(false);
+      return { ok: false, message: msg };
+    }
+
+    if (!cleanPass || cleanPass.length < 4) {
+      const msg = 'Maxsus parol kamida 4 ta belgidan iborat bo‘lishi kerak.';
+      setLoginError(msg);
+      setLoading(false);
+      return { ok: false, message: msg };
+    }
+
+    if (cleanPass === '7788') {
+      const msg = 'Ushbu kod tizim administratori uchun band qilingan. Boshqa maxsus parol tanlang.';
+      setLoginError(msg);
+      setLoading(false);
+      return { ok: false, message: msg };
+    }
+
+    const existingSameEmail = sessionsRef.current.find(
+      (s) => s.email && s.email.toLowerCase() === cleanEmail
+    );
+    if (existingSameEmail) {
+      if (existingSameEmail.password === cleanPass && startImmediately) {
+        await handleLogin(cleanEmail, cleanPass, false);
+        return { ok: true };
+      }
+      const msg =
+        'Ushbu elektron pochta manzili bilan akkaunt allaqachon yaratilgan. «Tizimga kirish» bo‘limi orqali elektron pochta va parolingiz bilan kiring.';
+      setLoginError(msg);
+      setLoading(false);
+      return { ok: false, message: msg };
+    }
+
+    try {
+      const cfg = scoringConfigRef.current;
+      const now = new Date().toISOString();
+      const sessionId = `sess_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 7)}`;
+      const variantQs = getSessionVariantQuestions(
+        questionsRef.current,
+        sessionId
+      );
+      const activeMods = getActiveModulesForQuestions(variantQs);
+      const firstModule: ModuleId = activeMods[0] || 'rw_1';
+
+      const newSession: StudentSession = {
+        id: sessionId,
+        fullName: cleanName,
+        email: cleanEmail,
+        password: cleanPass,
+        status: 'in_progress',
+        currentModule: firstModule,
+        currentQuestionIndex: 0,
+        viewMode: 'question',
+        answers: {},
+        flagged: {},
+        eliminated: {},
+        highlights: [],
+        moduleTimeRemaining: {
+          rw_1: MODULE_CONFIGS.rw_1.durationSeconds,
+          rw_2: MODULE_CONFIGS.rw_2.durationSeconds,
+          math_1: MODULE_CONFIGS.math_1.durationSeconds,
+          math_2: MODULE_CONFIGS.math_2.durationSeconds,
+        },
+        completedModules: [],
+        startedAt: now,
+        updatedAt: now,
+        score: calculateSATScore(variantQs, {}, cfg),
+      };
+
+      setSessions((prev) => [newSession, ...prev]);
+      await saveSessionToFirestore(newSession);
+
+      fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: cleanName,
+          email: cleanEmail,
+          password: cleanPass,
+          forceNew: true,
+        }),
+      }).catch(() => {});
+
+      if (startImmediately) {
+        activeSessionIdRef.current = newSession.id;
+        roleRef.current = 'student';
+        setActiveSessionId(newSession.id);
+        setViewingResultEarly(false);
+        setStudentScreen('dashboard');
+        setRole('student');
+      }
+
+      return {
+        ok: true,
+        message:
+          'Akkaunt muvaffaqiyatli yaratildi! Endi elektron pochta manzilingiz va parolingiz orqali tizimga kirishingiz mumkin.',
+      };
+    } catch {
+      const msg = 'Akkaunt yaratishda ma’lumotlar bazasi bilan xatolik yuz berdi.';
+      setLoginError(msg);
+      return { ok: false, message: msg };
     } finally {
       setLoading(false);
     }
@@ -858,6 +1013,9 @@ export default function App() {
         scoringConfig={scoringConfig}
         onDeleteSession={handleDeleteSession}
         onResetSession={handleResetSession}
+        onCreateStudentAccount={(fullName, email, password) =>
+          handleRegisterAccount(fullName, email, password, false)
+        }
         onUpdateQuestion={handleUpdateQuestion}
         onAddQuestion={handleAddQuestion}
         onDeleteQuestion={handleDeleteQuestion}
@@ -875,22 +1033,70 @@ export default function App() {
   }
 
   if (role === 'student' && activeSession) {
-    if (activeSession.status === 'completed' || viewingResultEarly) {
+    if (studentScreen === 'dashboard') {
+      return (
+        <StudentDashboardView
+          session={activeSession}
+          allSessions={sessions}
+          questions={activeVariantQuestions}
+          scoringConfig={scoringConfig}
+          onStartExam={() => {
+            setViewingResultEarly(false);
+            setStudentScreen(
+              activeSession.status === 'completed' ? 'results' : 'exam'
+            );
+          }}
+          onViewResults={() => {
+            setViewingResultEarly(true);
+            setStudentScreen('results');
+          }}
+          onRestartExam={async () => {
+            await handleResetSession(activeSession.id);
+            setViewingResultEarly(false);
+            setStudentScreen('exam');
+          }}
+          onLogout={() => {
+            setRole('guest');
+            setActiveSessionId(null);
+            setViewingResultEarly(false);
+            setStudentScreen('dashboard');
+          }}
+        />
+      );
+    }
+
+    if (
+      studentScreen === 'results' ||
+      activeSession.status === 'completed' ||
+      viewingResultEarly
+    ) {
       return (
         <StudentResultView
           session={activeSession}
           questions={activeVariantQuestions}
           scoringConfig={scoringConfig}
-          onRestartExam={() => handleResetSession(activeSession.id)}
+          onRestartExam={async () => {
+            await handleResetSession(activeSession.id);
+            setViewingResultEarly(false);
+            setStudentScreen('exam');
+          }}
+          onReturnToDashboard={() => {
+            setViewingResultEarly(false);
+            setStudentScreen('dashboard');
+          }}
           onReturnToExam={
             activeSession.status !== 'completed'
-              ? () => setViewingResultEarly(false)
+              ? () => {
+                  setViewingResultEarly(false);
+                  setStudentScreen('exam');
+                }
               : undefined
           }
           onLogout={() => {
             setRole('guest');
             setActiveSessionId(null);
             setViewingResultEarly(false);
+            setStudentScreen('dashboard');
           }}
         />
       );
@@ -902,7 +1108,10 @@ export default function App() {
         questions={activeVariantQuestions}
         scoringConfig={scoringConfig}
         onSyncSession={handleSyncSession}
-        onExitExam={() => setViewingResultEarly(true)}
+        onExitExam={() => {
+          setViewingResultEarly(false);
+          setStudentScreen('dashboard');
+        }}
       />
     );
   }
@@ -910,6 +1119,7 @@ export default function App() {
   return (
     <LoginView
       onLogin={handleLogin}
+      onRegister={handleRegisterAccount}
       loading={loading}
       error={loginError}
     />

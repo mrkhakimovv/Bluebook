@@ -17,6 +17,11 @@
           "minLength": 1,
           "maxLength": 120
         },
+        "email": {
+          "type": "string",
+          "description": "Student email address",
+          "maxLength": 160
+        },
         "password": {
           "type": "string",
           "description": "Student session access password",

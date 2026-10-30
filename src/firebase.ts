@@ -138,6 +138,10 @@ export function sanitizeSessionForFirestore(
     score: session.score,
   };
 
+  if (session.email && typeof session.email === 'string' && session.email.trim()) {
+    payload.email = session.email.trim().toLowerCase().slice(0, 160);
+  }
+
   if (session.completedAt) {
     payload.completedAt = session.completedAt.slice(0, 64);
   }

@@ -39,6 +39,7 @@ service cloud.firestore {
       data.keys().hasOnly([
         'id',
         'fullName',
+        'email',
         'password',
         'status',
         'currentModule',
@@ -60,6 +61,7 @@ service cloud.firestore {
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
+      (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
       data.password is string && data.password.size() >= 1 && data.password.size() <= 64 &&
       data.status is string && data.status.size() <= 32 && data.status in ['in_progress', 'break', 'completed'] &&
       data.currentModule is string && data.currentModule.size() <= 16 && data.currentModule in ['rw_1', 'rw_2', 'math_1', 'math_2'] &&

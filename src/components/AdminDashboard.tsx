@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
+  Home,
   Search,
   Trash2,
   RotateCcw,
@@ -20,6 +21,21 @@ import {
   RefreshCw,
   FileJson,
   ArrowUpDown,
+  FileText,
+  AlertCircle,
+  BarChart2,
+  Calendar,
+  BookMarked,
+  Sigma,
+  Gift,
+  Ticket,
+  PanelLeftClose,
+  PanelLeftOpen,
+  CalendarDays,
+  ClipboardList,
+  Menu,
+  UserPlus,
+  Clock,
 } from 'lucide-react';
 import {
   StudentSession,
@@ -52,6 +68,24 @@ import {
   getSessionVariantQuestions,
   formatModuleVariantLabel,
 } from '../utils/questionValidation';
+import {
+  loadPlatformContent,
+  savePlatformContent,
+  PlatformContentConfig,
+} from '../data/platformContent';
+
+type AdminSidebarTab =
+  | 'home'
+  | 'questions'
+  | 'results'
+  | 'error_notebook'
+  | 'my_metrics'
+  | 'scoring'
+  | 'study_plan'
+  | 'vocabulary'
+  | 'formula_sheet'
+  | 'referrals'
+  | 'promocode';
 
 interface AdminDashboardProps {
   adminName: string;
@@ -60,6 +94,11 @@ interface AdminDashboardProps {
   scoringConfig: ScoringConfig;
   onDeleteSession: (id: string) => Promise<void>;
   onResetSession: (id: string) => Promise<void>;
+  onCreateStudentAccount?: (
+    fullName: string,
+    email: string,
+    password: string
+  ) => Promise<{ ok: boolean; message?: string }>;
   onUpdateQuestion: (q: SATQuestion) => Promise<void>;
   onAddQuestion: (q: Omit<SATQuestion, 'id' | 'number'>) => Promise<void>;
   onDeleteQuestion: (id: string) => Promise<void>;
@@ -85,6 +124,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   scoringConfig,
   onDeleteSession,
   onResetSession,
+  onCreateStudentAccount,
   onUpdateQuestion,
   onAddQuestion,
   onDeleteQuestion,
@@ -95,7 +135,54 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onImportItemParams,
   onLogout,
 }) => {
-  const [activeTab, setActiveTab] = useState<'results' | 'questions' | 'scoring'>('results');
+  const [activeTab, setActiveTab] = useState<AdminSidebarTab>('home');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState<'weekly' | 'monthly'>('weekly');
+  const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
+  const [selectedExamDate, setSelectedExamDate] = useState<string | null>(null);
+
+  // Shared Platform Content (Exam Dates, Study Plan, Vocabulary, Formulas, Promocodes)
+  const [platformContent, setPlatformContent] = useState<PlatformContentConfig>(() =>
+    loadPlatformContent()
+  );
+  const updatePlatformContent = (next: PlatformContentConfig) => {
+    setPlatformContent(next);
+    savePlatformContent(next);
+  };
+
+  // Inline Admin Content Creation States
+  const [newExamLabel, setNewExamLabel] = useState('');
+  const [newExamIso, setNewExamIso] = useState('');
+  const [isAddingExamDate, setIsAddingExamDate] = useState(false);
+
+  const [newPlanTitle, setNewPlanTitle] = useState('');
+  const [newPlanDuration, setNewPlanDuration] = useState('32 min');
+  const [newPlanModule, setNewPlanModule] = useState<ModuleId | ''>('rw_1');
+  const [isAddingPlanTask, setIsAddingPlanTask] = useState(false);
+
+  const [newVocabWord, setNewVocabWord] = useState('');
+  const [newVocabPart, setNewVocabPart] = useState('adjective');
+  const [newVocabDef, setNewVocabDef] = useState('');
+  const [newVocabEx, setNewVocabEx] = useState('');
+
+  const [newFormulaGroupTitle, setNewFormulaGroupTitle] = useState('');
+  const [newFormulaGroupLines, setNewFormulaGroupLines] = useState('');
+
+  const [newPromoCode, setNewPromoCode] = useState('');
+  const [newPromoPlan, setNewPromoPlan] = useState('Pro plan');
+  const [newPromoBonus, setNewPromoBonus] = useState(500);
+
+  // Admin Create Student Account Modal/Form state
+  const [isAddingStudent, setIsAddingStudent] = useState(false);
+  const [newStudentName, setNewStudentName] = useState('');
+  const [newStudentEmail, setNewStudentEmail] = useState('');
+  const [newStudentPassword, setNewStudentPassword] = useState('');
+  const [newStudentFeedback, setNewStudentFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed'>('all');
   const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(null);
@@ -333,9 +420,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const filteredSessions = sessions.filter((s) => {
+    const q = searchQuery.toLowerCase();
     const matchesSearch =
-      s.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.password.toLowerCase().includes(searchQuery.toLowerCase());
+      s.fullName.toLowerCase().includes(q) ||
+      (s.email && s.email.toLowerCase().includes(q)) ||
+      s.password.toLowerCase().includes(q);
     const matchesStatus =
       statusFilter === 'all' ||
       (statusFilter === 'completed'
@@ -985,63 +1074,1128 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Platform-wide KPIs, Weekly Activity, Leaderboard, Global Errors & Domain Metrics
+  const platformDashboardStats = useMemo(() => {
+    let totalAnswered = 0;
+    let totalCorrect = 0;
+    let totalSpentSeconds = 0;
+
+    const totalDefaultSeconds =
+      MODULE_CONFIGS.rw_1.durationSeconds +
+      MODULE_CONFIGS.rw_2.durationSeconds +
+      MODULE_CONFIGS.math_1.durationSeconds +
+      MODULE_CONFIGS.math_2.durationSeconds;
+
+    const errorCountsByQuestionId = new Map<
+      string,
+      { question: SATQuestion; wrongCount: number; attemptCount: number }
+    >();
+    const qLookup = new Map<string, SATQuestion>();
+    for (const q of questions) {
+      qLookup.set(q.id, q);
+    }
+
+    const rwDomains: Record<string, { correct: number; total: number }> = {};
+    const mathDomains: Record<string, { correct: number; total: number }> = {};
+
+    for (const s of sessions) {
+      const rem =
+        (s.moduleTimeRemaining?.rw_1 ?? MODULE_CONFIGS.rw_1.durationSeconds) +
+        (s.moduleTimeRemaining?.rw_2 ?? MODULE_CONFIGS.rw_2.durationSeconds) +
+        (s.moduleTimeRemaining?.math_1 ?? MODULE_CONFIGS.math_1.durationSeconds) +
+        (s.moduleTimeRemaining?.math_2 ?? MODULE_CONFIGS.math_2.durationSeconds);
+      totalSpentSeconds += Math.max(0, totalDefaultSeconds - rem);
+
+      for (const [qId, ans] of Object.entries(s.answers || {})) {
+        if (ans === undefined || String(ans).trim() === '') continue;
+        const qObj = qLookup.get(qId);
+        if (!qObj) continue;
+
+        totalAnswered += 1;
+        const ok = isAnswerCorrect(qObj, ans);
+        if (ok) {
+          totalCorrect += 1;
+        }
+
+        const prevErr = errorCountsByQuestionId.get(qId) || {
+          question: qObj,
+          wrongCount: 0,
+          attemptCount: 0,
+        };
+        prevErr.attemptCount += 1;
+        if (!ok) prevErr.wrongCount += 1;
+        errorCountsByQuestionId.set(qId, prevErr);
+
+        const dom = qObj.domain || 'General';
+        const targetDomMap = qObj.moduleId.startsWith('rw_') ? rwDomains : mathDomains;
+        if (!targetDomMap[dom]) {
+          targetDomMap[dom] = { correct: 0, total: 0 };
+        }
+        targetDomMap[dom].total += 1;
+        if (ok) targetDomMap[dom].correct += 1;
+      }
+    }
+
+    const accuracy =
+      totalAnswered > 0 ? Math.round((totalCorrect / totalAnswered) * 100) : 0;
+    const totalPoints = totalCorrect * 175;
+    const totalMinutes = Math.max(
+      totalAnswered > 0 ? 1 : 0,
+      Math.round(totalSpentSeconds / 60)
+    );
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+
+    // Weekly Activity (Sat -> Fri)
+    const days = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    const dayCounts: number[] = [0, 0, 0, 0, 0, 0, 0];
+    const mapDayToIdx: Record<number, number> = {
+      6: 0,
+      0: 1,
+      1: 2,
+      2: 3,
+      3: 4,
+      4: 5,
+      5: 6,
+    };
+    for (const s of sessions) {
+      const d = new Date(s.updatedAt || s.startedAt || Date.now());
+      const idx = mapDayToIdx[d.getDay()] ?? 5;
+      dayCounts[idx] += Math.max(1, Object.keys(s.answers || {}).length);
+    }
+    const todayIdx = mapDayToIdx[new Date().getDay()] ?? 5;
+    if (!dayCounts.some((c) => c > 0)) {
+      dayCounts[todayIdx] = Math.max(totalAnswered, 4);
+    }
+
+    const weeklyBars = days.map((day, idx) => ({
+      day,
+      count: dayCounts[idx],
+      isActive: dayCounts[idx] > 0 || idx === todayIdx,
+    }));
+
+    const globalErrorList = Array.from(errorCountsByQuestionId.values())
+      .filter((item) => item.wrongCount > 0)
+      .sort((a, b) => b.wrongCount - a.wrongCount);
+
+    return {
+      totalAnswered,
+      totalCorrect,
+      accuracy,
+      totalPoints,
+      streak: Math.max(1, sessions.length),
+      studyTimeFormatted: `${hours}h ${mins}m`,
+      weeklyBars,
+      globalErrorList,
+      rwDomains,
+      mathDomains,
+    };
+  }, [sessions, questions]);
+
+  // Leaderboard entries (Real sessions + benchmark students matching screenshot)
+  const leaderboard = useMemo(() => {
+    const entries: {
+      id: string;
+      sessionId?: string;
+      name: string;
+      email?: string;
+      points: number;
+      initial: string;
+      color: string;
+      statusLabel?: string;
+    }[] = [
+      {
+        id: 'bench_top_1',
+        name: 'Mamataliyev Baxtiyor',
+        points: leaderboardPeriod === 'weekly' ? 18130 : 36200,
+        initial: 'M',
+        color: 'bg-[#059669]',
+        statusLabel: 'Top 1',
+      },
+      {
+        id: 'bench_top_2',
+        name: 'Akbar Yoldoshev',
+        points: leaderboardPeriod === 'weekly' ? 14525 : 29800,
+        initial: 'A',
+        color: 'bg-[#2563eb]',
+        statusLabel: 'Top 2',
+      },
+      {
+        id: 'bench_top_3',
+        name: 'Nasrin Hridy',
+        points: leaderboardPeriod === 'weekly' ? 12070 : 28450,
+        initial: 'N',
+        color: 'bg-[#ea580c]',
+        statusLabel: 'Top 3',
+      },
+    ];
+
+    const colors = ['bg-[#2563eb]', 'bg-[#059669]', 'bg-[#ea580c]', 'bg-[#7c3aed]'];
+    sessions.forEach((s, i) => {
+      const answered = Object.keys(s.answers || {}).length;
+      const pts =
+        Math.max(s.score?.rwRaw || 0, answered) * 175 +
+        (s.status === 'completed' ? s.score?.total || 0 : 0);
+      const existingIdx = entries.findIndex(
+        (e) => e.name.toLowerCase() === s.fullName.toLowerCase()
+      );
+      const entry = {
+        id: s.id,
+        sessionId: s.id,
+        name: s.fullName,
+        email: s.email,
+        points: pts,
+        initial: (s.fullName.trim()[0] || 'S').toUpperCase(),
+        color: colors[i % colors.length],
+        statusLabel: s.status === 'completed' ? 'Yakunlangan' : 'Jarayonda',
+      };
+      if (existingIdx >= 0) {
+        entries[existingIdx] = {
+          ...entry,
+          points: Math.max(entries[existingIdx].points, pts),
+        };
+      } else {
+        entries.push(entry);
+      }
+    });
+
+    return entries.sort((a, b) => b.points - a.points);
+  }, [sessions, leaderboardPeriod]);
+
+  const topThree = leaderboard.slice(0, 3);
+
+  const countdownDays = useMemo(() => {
+    if (!selectedExamDate) return null;
+    const target = new Date(selectedExamDate).getTime();
+    const now = Date.now();
+    const diff = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+    return Math.max(0, diff);
+  }, [selectedExamDate]);
+
+  const navSelect = (tab: AdminSidebarTab) => {
+    setActiveTab(tab);
+    setMobileMenuOpen(false);
+  };
+
+  const handleAddExamDate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newExamLabel.trim() || !newExamIso.trim()) return;
+    const next: PlatformContentConfig = {
+      ...platformContent,
+      examDates: [
+        ...platformContent.examDates,
+        {
+          id: `date_${Date.now()}`,
+          label: newExamLabel.trim(),
+          iso: newExamIso.trim(),
+        },
+      ],
+    };
+    updatePlatformContent(next);
+    setNewExamLabel('');
+    setNewExamIso('');
+    setIsAddingExamDate(false);
+  };
+
+  const handleRemoveExamDate = (id: string) => {
+    updatePlatformContent({
+      ...platformContent,
+      examDates: platformContent.examDates.filter((d) => d.id !== id),
+    });
+  };
+
+  const handleAddPlanTemplate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPlanTitle.trim()) return;
+    updatePlatformContent({
+      ...platformContent,
+      studyPlanTemplates: [
+        ...platformContent.studyPlanTemplates,
+        {
+          id: `tpl_${Date.now()}`,
+          title: newPlanTitle.trim(),
+          duration: newPlanDuration.trim() || '30 min',
+          moduleId: newPlanModule || undefined,
+        },
+      ],
+    });
+    setNewPlanTitle('');
+    setIsAddingPlanTask(false);
+  };
+
+  const handleRemovePlanTemplate = (id: string) => {
+    updatePlatformContent({
+      ...platformContent,
+      studyPlanTemplates: platformContent.studyPlanTemplates.filter((t) => t.id !== id),
+    });
+  };
+
+  const handleCreateStudentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onCreateStudentAccount) return;
+    setNewStudentFeedback(null);
+    const res = await onCreateStudentAccount(
+      newStudentName,
+      newStudentEmail,
+      newStudentPassword
+    );
+    if (res.ok) {
+      setNewStudentFeedback({
+        type: 'success',
+        text: res.message || 'O‘quvchi akkaunti muvaffaqiyatli yaratildi!',
+      });
+      setNewStudentName('');
+      setNewStudentEmail('');
+      setNewStudentPassword('');
+    } else {
+      setNewStudentFeedback({
+        type: 'error',
+        text: res.message || 'Xatolik yuz berdi.',
+      });
+    }
+  };
+
+  const adminInitial = (adminName.trim()[0] || 'A').toUpperCase();
+
   return (
-    <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-      {/* Top Bar following 3-zone contract */}
-      <header className="flex flex-wrap items-center justify-between gap-3 sm:gap-8 px-4 sm:px-8 py-3.5 sm:py-4 bg-white border-b border-slate-200">
-        <div className="text-base sm:text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
-          Bluebook SAT Admin Panel
+    <div className="min-h-screen bg-white text-slate-900 flex flex-col md:flex-row p-2 sm:p-4 gap-4 sm:gap-6">
+      {/* Mobile Header Bar */}
+      <div className="flex md:hidden items-center justify-between px-3 py-2.5 bg-white border border-slate-200 rounded-xl shadow-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-base font-extrabold tracking-tight text-slate-900">
+            Bluebook
+          </span>
+          <span className="px-1.5 py-0.5 text-[10px] font-extrabold bg-slate-900 text-white rounded">
+            SAT
+          </span>
+          <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-50 text-[#2563eb] rounded border border-blue-200">
+            ADMIN
+          </span>
         </div>
-
-        <nav className="flex items-center gap-4 sm:gap-6 text-xs sm:text-sm font-medium text-slate-600 overflow-x-auto max-w-full order-3 md:order-2 w-full md:w-auto pt-1 md:pt-0 border-t md:border-t-0 border-slate-100">
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setActiveTab('results')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'results'
-                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
-                : 'hover:text-slate-900'
-            }`}
+            type="button"
+            onClick={() => {
+              navSelect('questions');
+              openCreateModal(selectedModuleFilter);
+            }}
+            className="px-3 py-1.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
           >
-            Real-Vaqt Natijalar ({sessions.length})
+            <Plus className="w-3.5 h-3.5" />
+            <span>Savol</span>
           </button>
           <button
-            onClick={() => setActiveTab('questions')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'questions'
-                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
-                : 'hover:text-slate-900'
-            }`}
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="p-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 cursor-pointer"
           >
-            Savollar Bazasi ({questions.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('scoring')}
-            className={`py-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1.5 ${
-              activeTab === 'scoring'
-                ? 'text-slate-900 font-bold border-b-2 border-[#2563eb]'
-                : 'hover:text-slate-900'
-            }`}
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            <span>Baholash</span>
-          </button>
-        </nav>
-
-        <div className="flex items-center gap-3 shrink-0 order-2 md:order-3">
-          <button
-            onClick={onLogout}
-            className="px-3.5 sm:px-4 py-2 text-xs font-semibold text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Chiqish ({adminName})</span>
+            {mobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
           </button>
         </div>
-      </header>
+      </div>
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-8 space-y-6 sm:space-y-8">
-        {activeTab === 'results' ? (
+      {/* Left Sidebar (Exact Match to image_c60a7b94.png on White Theme) */}
+      <aside
+        className={`${
+          mobileMenuOpen ? 'fixed inset-4 z-50 flex' : 'hidden md:flex'
+        } ${
+          sidebarCollapsed ? 'md:w-20' : 'md:w-64'
+        } shrink-0 bg-white border border-slate-200 rounded-2xl shadow-xs flex-col justify-between p-3.5 transition-all`}
+      >
+        <div className="space-y-5 overflow-y-auto pr-0.5">
+          {/* Brand Header */}
+          <div className="flex items-center justify-between px-2 pt-1">
+            {!sidebarCollapsed && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-lg font-extrabold tracking-tight text-slate-900">
+                  Bluebook
+                </span>
+                <span className="px-1.5 py-0.5 text-[10px] font-extrabold bg-slate-900 text-white rounded">
+                  SAT
+                </span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (mobileMenuOpen) {
+                  setMobileMenuOpen(false);
+                } else {
+                  setSidebarCollapsed(!sidebarCollapsed);
+                }
+              }}
+              title={sidebarCollapsed ? 'Yon panelni ochish' : 'Yon panelni yig‘ish'}
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="w-4 h-4" />
+              ) : (
+                <PanelLeftClose className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+
+          {/* Home Button (Active Bordered Pill like image_c60a7b94.png) */}
+          <div>
+            <button
+              type="button"
+              onClick={() => navSelect('home')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                activeTab === 'home'
+                  ? 'bg-slate-100/80 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Home className="w-4 h-4 text-[#2563eb] shrink-0" />
+              {!sidebarCollapsed && <span>Home</span>}
+            </button>
+          </div>
+
+          {/* Practice Section */}
+          <div className="space-y-1">
+            {!sidebarCollapsed && (
+              <div className="px-3 text-[11px] font-semibold text-slate-400">
+                Practice
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => navSelect('questions')}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'questions'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <span className="flex items-center gap-3">
+                <BookOpen className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Question Bank</span>}
+              </span>
+              {!sidebarCollapsed && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  {questions.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('results')}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'results'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <span className="flex items-center gap-3">
+                <FileText className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Practice Tests</span>}
+              </span>
+              {!sidebarCollapsed && (
+                <span className="w-2 h-2 rounded-full bg-[#2563eb]" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('error_notebook')}
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'error_notebook'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <span className="flex items-center gap-3">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                {!sidebarCollapsed && <span>Error Notebook</span>}
+              </span>
+              {!sidebarCollapsed && platformDashboardStats.globalErrorList.length > 0 && (
+                <span className="text-[11px] font-bold text-red-600">
+                  {platformDashboardStats.globalErrorList.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* Progress Section */}
+          <div className="space-y-1">
+            {!sidebarCollapsed && (
+              <div className="px-3 text-[11px] font-semibold text-slate-400">
+                Progress
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => navSelect('my_metrics')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'my_metrics'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <BarChart2 className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>My Metrics</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('scoring')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'scoring'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Calculator className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Calculate Score</span>}
+            </button>
+          </div>
+
+          {/* Preparation Section */}
+          <div className="space-y-1">
+            {!sidebarCollapsed && (
+              <div className="px-3 text-[11px] font-semibold text-slate-400">
+                Preparation
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => navSelect('study_plan')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'study_plan'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Calendar className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>AI Study Plan</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('vocabulary')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'vocabulary'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <BookMarked className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Vocabulary</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('formula_sheet')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'formula_sheet'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Sigma className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Formula Sheet</span>}
+            </button>
+          </div>
+        </div>
+
+        {/* Bottom Links & Admin Profile Card */}
+        <div className="space-y-3 pt-4 border-t border-slate-100">
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => navSelect('referrals')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'referrals'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Gift className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Referrals</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => navSelect('promocode')}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                activeTab === 'promocode'
+                  ? 'bg-slate-100 text-slate-900 font-bold border border-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent'
+              }`}
+            >
+              <Ticket className="w-4 h-4 shrink-0" />
+              {!sidebarCollapsed && <span>Promocode</span>}
+            </button>
+          </div>
+
+          {/* Admin Profile Pill at Bottom */}
+          <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-[#2563eb] text-white font-bold text-xs flex items-center justify-center shrink-0">
+                {adminInitial}
+              </div>
+              {!sidebarCollapsed && (
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-900 truncate">
+                    {adminName}
+                  </div>
+                  <div className="text-[10px] font-semibold text-[#2563eb] truncate">
+                    Boshqaruv Paneli
+                  </div>
+                </div>
+              )}
+            </div>
+            {!sidebarCollapsed && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Admin panelidan chiqish"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer shrink-0"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Area on Clean White Background */}
+      <main className="flex-1 min-w-0 bg-white px-2 sm:px-6 py-2 sm:py-4 space-y-6 overflow-y-auto">
+        {activeTab === 'home' ? (
           <>
+            {/* Top Header matching image_c60a7b94.png */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                  Dashboard
+                </h1>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-[#2563eb] border border-blue-200">
+                  Admin Boshqaruvi
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => navSelect('results')}
+                  className="px-3.5 py-2 rounded-full border border-slate-200 hover:bg-slate-50 text-xs font-bold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-[#2563eb]" />
+                  <span>O‘quvchilar ({sessions.length})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navSelect('questions');
+                    openCreateModal(selectedModuleFilter);
+                  }}
+                  className="px-4 py-2.5 rounded-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Practice Test / Savol Qo‘shish</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 5-Column Top KPI Strip with Vertical Dividers (Exact Match to image_c60a7b94.png) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-y-6 py-4 px-2 border-b border-slate-100 lg:divide-x lg:divide-slate-200">
+              <div className="px-4 first:pl-0 space-y-2">
+                <div className="text-xs font-semibold text-slate-600">Accuracy</div>
+                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.accuracy}%
+                </div>
+                <div className="text-xs text-slate-400">
+                  {platformDashboardStats.totalCorrect} correct
+                </div>
+              </div>
+
+              <div className="px-4 space-y-2">
+                <div className="text-xs font-semibold text-slate-600">Total points</div>
+                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.totalPoints}
+                </div>
+                <div className="text-xs text-slate-400">Lifetime points</div>
+              </div>
+
+              <div className="px-4 space-y-2">
+                <div className="text-xs font-semibold text-slate-600">Streak</div>
+                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.streak}
+                </div>
+                <div className="text-xs text-slate-400">Start your streak</div>
+              </div>
+
+              <div className="px-4 space-y-2">
+                <div className="text-xs font-semibold text-slate-600">Study Time</div>
+                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.studyTimeFormatted}
+                </div>
+                <div className="text-xs text-slate-400">Total time spent</div>
+              </div>
+
+              <div className="px-4 space-y-2">
+                <div className="text-xs font-semibold text-slate-600">Total Attempts</div>
+                <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.totalAnswered}
+                </div>
+                <div className="text-xs text-slate-400">All questions tried</div>
+              </div>
+            </div>
+
+            {/* Middle 3-Card Row: Weekly Activity | Exam Countdown | Today's plan */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              {/* Card 1: Weekly Activity */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col justify-between min-h-[240px]">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-base font-bold text-slate-900">Weekly Activity</h2>
+                  <span className="text-xs font-semibold text-slate-600">
+                    {platformDashboardStats.totalAnswered} questions
+                  </span>
+                </div>
+
+                <div className="relative pt-8 pb-2 flex-1 flex flex-col justify-end">
+                  <div className="absolute inset-x-0 top-8 bottom-8 flex flex-col justify-between pointer-events-none">
+                    <div className="border-b border-dashed border-slate-200 w-full" />
+                    <div className="border-b border-dashed border-slate-200 w-full" />
+                    <div className="border-b border-dashed border-slate-200 w-full" />
+                    <div className="border-b border-slate-200 w-full" />
+                  </div>
+
+                  <div className="relative z-10 grid grid-cols-7 gap-2 items-end h-28 pt-4">
+                    {platformDashboardStats.weeklyBars.map((bar) => (
+                      <div
+                        key={bar.day}
+                        className="flex flex-col items-center justify-end h-full gap-2"
+                      >
+                        <div className="w-full flex items-end justify-center h-20">
+                          {bar.isActive ? (
+                            <div
+                              className="w-7 sm:w-8 rounded-md bg-[#2563eb] transition-all"
+                              style={{
+                                height: `${Math.min(
+                                  100,
+                                  Math.max(45, bar.count * 8)
+                                )}%`,
+                              }}
+                              title={`${bar.count} questions`}
+                            />
+                          ) : (
+                            <div className="w-6 sm:w-7 h-2 rounded-full bg-slate-200" />
+                          )}
+                        </div>
+                        <span className="text-[11px] font-medium text-slate-500">
+                          {bar.day}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Exam Countdown (with Admin Date Manager) */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col justify-between min-h-[240px]">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600">
+                        <CalendarDays className="w-4 h-4" />
+                      </div>
+                      <h2 className="text-base font-bold text-slate-900">
+                        Exam Countdown
+                      </h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingExamDate(!isAddingExamDate)}
+                      className="text-xs font-semibold text-[#2563eb] hover:underline cursor-pointer"
+                    >
+                      {isAddingExamDate ? 'Yopish' : '+ Sana'}
+                    </button>
+                  </div>
+
+                  {isAddingExamDate ? (
+                    <form onSubmit={handleAddExamDate} className="space-y-2 pt-1">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={newExamLabel}
+                          onChange={(e) => setNewExamLabel(e.target.value)}
+                          placeholder="Masalan: Aug 28, 2027"
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+                        />
+                        <input
+                          type="date"
+                          value={newExamIso}
+                          onChange={(e) => setNewExamIso(e.target.value)}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        className="w-full py-1.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                      >
+                        Sanani saqlash
+                      </button>
+                    </form>
+                  ) : selectedExamDate ? (
+                    <div className="py-1">
+                      <div className="text-2xl font-extrabold text-[#2563eb] tabular-nums">
+                        {countdownDays} days left
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Target Official SAT Date:{' '}
+                        <span className="font-semibold text-slate-800">
+                          {
+                            platformContent.examDates.find(
+                              (d) => d.iso === selectedExamDate
+                            )?.label
+                          }
+                        </span>
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs font-semibold text-slate-700 pt-1">
+                      Select your SAT date to start the countdown
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-4">
+                  {platformContent.examDates.map((d) => {
+                    const isSelected = selectedExamDate === d.iso;
+                    return (
+                      <div
+                        key={d.id}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                          isSelected
+                            ? 'bg-[#2563eb] text-white'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedExamDate(isSelected ? null : d.iso)
+                          }
+                          className="cursor-pointer"
+                        >
+                          {d.label}
+                        </button>
+                        {isAddingExamDate && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveExamDate(d.id)}
+                            title="Sanani o‘chirish"
+                            className="text-red-500 hover:text-red-700 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Card 3: Today's plan (with Admin Plan Manager) */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col justify-between min-h-[240px]">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-600">
+                      <ClipboardList className="w-4 h-4" />
+                    </div>
+                    <h2 className="text-base font-bold text-slate-900">Today's plan</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navSelect('study_plan')}
+                    className="text-xs font-semibold text-[#2563eb] hover:underline cursor-pointer"
+                  >
+                    View all
+                  </button>
+                </div>
+
+                <div className="space-y-2 pt-3">
+                  {platformContent.studyPlanTemplates.slice(0, 3).map((task) => (
+                    <div
+                      key={task.id}
+                      onClick={() => navSelect('study_plan')}
+                      className="flex items-center justify-between gap-2 p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          readOnly
+                          checked={false}
+                          className="rounded border-slate-300 text-[#2563eb] pointer-events-none"
+                        />
+                        <span className="truncate font-medium text-slate-800">
+                          {task.title}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-semibold text-slate-400 shrink-0">
+                        {task.duration}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Leaderboard Section (Exact Podium Match + Quick Session Inspector) */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-base font-bold text-slate-900">Leaderboard</h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllLeaderboard(!showAllLeaderboard)}
+                    className="text-xs font-semibold text-[#2563eb] hover:underline cursor-pointer"
+                  >
+                    {showAllLeaderboard ? 'Hide list' : 'View all'}
+                  </button>
+                </div>
+
+                <div className="inline-flex items-center p-1 bg-slate-100 rounded-full">
+                  <button
+                    type="button"
+                    onClick={() => setLeaderboardPeriod('weekly')}
+                    className={`px-3.5 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                      leaderboardPeriod === 'weekly'
+                        ? 'bg-[#2563eb] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Weekly
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLeaderboardPeriod('monthly')}
+                    className={`px-3.5 py-1 rounded-full text-xs font-bold transition-colors cursor-pointer ${
+                      leaderboardPeriod === 'monthly'
+                        ? 'bg-[#2563eb] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Monthly
+                  </button>
+                </div>
+              </div>
+
+              {/* 3-Place Podium */}
+              <div className="max-w-2xl mx-auto pt-4 grid grid-cols-3 gap-3 sm:gap-6 items-end">
+                {/* 2nd Place (Left) */}
+                {topThree[1] && (
+                  <div className="flex flex-col items-center text-center">
+                    <div
+                      className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full ${topThree[1].color} text-white font-bold text-lg sm:text-xl flex items-center justify-center border-2 border-slate-200 shadow-sm mb-2`}
+                    >
+                      {topThree[1].initial}
+                    </div>
+                    <div className="text-xs font-bold text-slate-900 line-clamp-1">
+                      {topThree[1].name}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mb-3 tabular-nums">
+                      {topThree[1].points.toLocaleString('ru-RU')} points
+                    </div>
+                    <div className="w-full h-20 sm:h-24 rounded-t-xl bg-gradient-to-b from-slate-200 to-slate-300 flex items-center justify-center">
+                      <span className="text-lg sm:text-xl font-extrabold text-slate-700">
+                        2nd
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1st Place (Center - Tallest) */}
+                {topThree[0] && (
+                  <div className="flex flex-col items-center text-center">
+                    <div
+                      className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full ${topThree[0].color} text-white font-bold text-xl sm:text-2xl flex items-center justify-center border-2 border-amber-400 shadow-sm mb-2`}
+                    >
+                      {topThree[0].initial}
+                    </div>
+                    <div className="text-xs sm:text-sm font-bold text-slate-900 line-clamp-1">
+                      {topThree[0].name}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mb-3 tabular-nums">
+                      {topThree[0].points.toLocaleString('ru-RU')} points
+                    </div>
+                    <div className="w-full h-28 sm:h-36 rounded-t-xl bg-gradient-to-b from-amber-300 to-amber-500 flex items-center justify-center shadow-xs">
+                      <span className="text-xl sm:text-2xl font-extrabold text-amber-950">
+                        1st
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3rd Place (Right) */}
+                {topThree[2] && (
+                  <div className="flex flex-col items-center text-center">
+                    <div
+                      className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full ${topThree[2].color} text-white font-bold text-lg sm:text-xl flex items-center justify-center border-2 border-slate-200 shadow-sm mb-2`}
+                    >
+                      {topThree[2].initial}
+                    </div>
+                    <div className="text-xs font-bold text-slate-900 line-clamp-1">
+                      {topThree[2].name}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mb-3 tabular-nums">
+                      {topThree[2].points.toLocaleString('ru-RU')} points
+                    </div>
+                    <div className="w-full h-14 sm:h-16 rounded-t-xl bg-gradient-to-b from-amber-700/80 to-amber-900 flex items-center justify-center">
+                      <span className="text-base sm:text-lg font-extrabold text-amber-100">
+                        3rd
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Full Leaderboard & Quick Admin Actions */}
+              {showAllLeaderboard && (
+                <div className="pt-4 border-t border-slate-200 overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 font-bold">
+                        <th className="py-2.5 px-3">#</th>
+                        <th className="py-2.5 px-3">Student</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3 text-right">Points</th>
+                        <th className="py-2.5 px-3 text-right">Admin Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {leaderboard.map((item, index) => (
+                        <tr key={item.id} className="hover:bg-slate-50">
+                          <td className="py-2.5 px-3 font-mono text-slate-500">
+                            {index + 1}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-900 flex items-center gap-2">
+                            <span
+                              className={`w-6 h-6 rounded-full ${item.color} text-white text-[11px] font-bold flex items-center justify-center`}
+                            >
+                              {item.initial}
+                            </span>
+                            <div>
+                              <div className="font-semibold">{item.name}</div>
+                              {item.email && (
+                                <div className="text-[10px] text-slate-400">
+                                  {item.email}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">
+                            {item.statusLabel || 'Active'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-slate-700">
+                            {item.points.toLocaleString('ru-RU')} pts
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            {item.sessionId ? (
+                              <button
+                                type="button"
+                                onClick={() => setInspectedSessionId(item.sessionId!)}
+                                className="text-xs font-bold text-[#2563eb] hover:underline cursor-pointer"
+                              >
+                                Tahlilni ko‘rish
+                              </button>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">Benchmark</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        ) : activeTab === 'results' ? (
+          <>
+            {/* Top Header for Practice Tests / Student Sessions Management */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                  Practice Tests & O‘quvchilar Boshqaruvi ({sessions.length})
+                </h1>
+                <p className="text-xs text-slate-500 mt-1">
+                  Barcha ro‘yxatdan o‘tgan o‘quvchilarning real vaqtdagi natijalari, javoblar varaqasi va akkaunt boshqaruvi.
+                </p>
+              </div>
+              {onCreateStudentAccount && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewStudentFeedback(null);
+                    setIsAddingStudent(!isAddingStudent);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>{isAddingStudent ? 'Formani yopish' : '+ Yangi O‘quvchi Akkaunti'}</span>
+                </button>
+              )}
+            </div>
+
+            {isAddingStudent && onCreateStudentAccount && (
+              <form
+                onSubmit={handleCreateStudentSubmit}
+                className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4"
+              >
+                <div className="text-xs font-bold text-slate-900">
+                  Yangi o‘quvchi akkauntini ro‘yxatdan o‘tkazish
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input
+                    type="text"
+                    required
+                    value={newStudentName}
+                    onChange={(e) => setNewStudentName(e.target.value)}
+                    placeholder="Ism va Familiya"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                  />
+                  <input
+                    type="email"
+                    required
+                    value={newStudentEmail}
+                    onChange={(e) => setNewStudentEmail(e.target.value)}
+                    placeholder="Elektron pochta (masalan: ali@gmail.com)"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                  />
+                  <input
+                    type="text"
+                    required
+                    value={newStudentPassword}
+                    onChange={(e) => setNewStudentPassword(e.target.value)}
+                    placeholder="Maxsus parol (kamida 4 belgi)"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                  />
+                </div>
+                {newStudentFeedback && (
+                  <div
+                    className={`text-xs font-semibold ${
+                      newStudentFeedback.type === 'success'
+                        ? 'text-emerald-700'
+                        : 'text-red-600'
+                    }`}
+                  >
+                    {newStudentFeedback.text}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                  >
+                    Akkauntni yaratish
+                  </button>
+                </div>
+              </form>
+            )}
+
             {/* 4 KPI Strip */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-1">
@@ -1179,8 +2333,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                         return (
                           <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="py-3.5 px-4 font-bold text-slate-900">
-                              {s.fullName}
+                            <td className="py-3.5 px-4">
+                              <div className="font-bold text-slate-900">{s.fullName}</div>
+                              {s.email && (
+                                <div className="text-[11px] font-normal text-slate-500">
+                                  {s.email}
+                                </div>
+                              )}
                             </td>
                             <td className="py-3.5 px-4 font-mono text-slate-600">
                               {s.password}
@@ -1818,7 +2977,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
           </div>
-        ) : (
+        ) : activeTab === 'scoring' ? (
           /* BAHOLASH (RASCH IRT SCORING & CALIBRATION) TAB */
           <div className="space-y-8">
             {/* 1. ScoringConfig Editor & Session Recalculation */}
@@ -2244,6 +3403,662 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        ) : activeTab === 'error_notebook' ? (
+          /* ADMIN ERROR NOTEBOOK: GLOBAL STUDENT ERROR ANALYTICS */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                Error Notebook — O‘quvchilar Eng Ko‘p Xato Qilgan Savollar (
+                {platformDashboardStats.globalErrorList.length})
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                Platformadagi barcha o‘quvchilar tomonidan xato belgilangan savollar statistikasi va ularni tezkor tahrirlash.
+              </p>
+            </div>
+
+            {platformDashboardStats.globalErrorList.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-3">
+                <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+                <div className="text-sm font-bold text-slate-900">
+                  Hozircha xato belgilangan savollar qayd etilmagan
+                </div>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  O‘quvchilar Practice Test ishlagan sari eng ko‘p xato qilinayotgan savollar shu yerda avtomatik tahlil qilinadi.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {platformDashboardStats.globalErrorList.map(
+                  ({ question: q, wrongCount, attemptCount }) => {
+                    const errRate =
+                      attemptCount > 0
+                        ? Math.round((wrongCount / attemptCount) * 100)
+                        : 0;
+                    return (
+                      <div
+                        key={q.id}
+                        className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900">
+                              {MODULE_CONFIGS[q.moduleId]?.shortTitle} · #{q.number}
+                            </span>
+                            <span className="font-mono text-[#2563eb] font-bold">
+                              ID: {q.id}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 font-bold border border-red-200">
+                              Xatolar: {wrongCount} / {attemptCount} ({errRate}%)
+                            </span>
+                            <span className="text-emerald-700 font-bold">
+                              To‘g‘ri javob: {q.correctAnswer}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditError(null);
+                              setEditingQuestion({ ...q });
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Savolni tahrirlash</span>
+                          </button>
+                        </div>
+
+                        <div
+                          className="text-sm font-medium text-slate-900 sat-serif"
+                          dangerouslySetInnerHTML={{
+                            __html: renderSATTextWithMath(q.prompt),
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'my_metrics' ? (
+          /* ADMIN METRICS: PLATFORM-WIDE DOMAIN ACCURACY & SCORE ANALYTICS */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                My Metrics — Platforma Umumiy Ko‘rsatkichlari
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                Barcha o‘quvchilarning Reading & Writing hamda Mathematics bo‘limlari bo‘yicha o‘zlashtirish ko‘rsatkichlari.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-1">
+                <span className="text-xs text-slate-500 font-medium">
+                  O‘rtacha Taxminiy Ball
+                </span>
+                <div className="text-3xl font-extrabold text-[#2563eb] tabular-nums">
+                  {completedSessions.length > 0 ? avgScore : '—'}
+                </div>
+                <span className="text-[11px] text-slate-400">Shkala: 400–1600</span>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-1">
+                <span className="text-xs text-slate-500 font-medium">
+                  Maksimal Ball
+                </span>
+                <div className="text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {completedSessions.length > 0 ? maxScore : '—'}
+                </div>
+                <span className="text-[11px] text-slate-400">Eng yuqori natija</span>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-1">
+                <span className="text-xs text-slate-500 font-medium">
+                  Umumiy Aniqlik (Accuracy)
+                </span>
+                <div className="text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {platformDashboardStats.accuracy}%
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  {platformDashboardStats.totalCorrect} / {platformDashboardStats.totalAnswered} to‘g‘ri
+                </span>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-1">
+                <span className="text-xs text-slate-500 font-medium">
+                  Savollar Bazasi
+                </span>
+                <div className="text-3xl font-extrabold text-slate-900 tabular-nums">
+                  {questions.length}
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  R&W: {rwTotalCount} · Math: {mathTotalCount}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Reading & Writing Yo‘nalishlari (Domains)
+                </h2>
+                {Object.keys(platformDashboardStats.rwDomains).length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Hozircha o‘quvchilar javoblari mavjud emas.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(platformDashboardStats.rwDomains).map(
+                      ([dom, dStat]) => {
+                        const pct =
+                          dStat.total > 0
+                            ? Math.round((dStat.correct / dStat.total) * 100)
+                            : 0;
+                        return (
+                          <div key={dom} className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                              <span className="font-medium text-slate-700">{dom}</span>
+                              <span className="font-mono text-slate-600">
+                                {dStat.correct}/{dStat.total} ({pct}%)
+                              </span>
+                            </div>
+                            <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                              <div
+                                className="h-full bg-[#2563eb] rounded-full"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      }
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-4">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Mathematics Yo‘nalishlari (Domains)
+                </h2>
+                {Object.keys(platformDashboardStats.mathDomains).length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Hozircha o‘quvchilar javoblari mavjud emas.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(platformDashboardStats.mathDomains).map(
+                      ([dom, dStat]) => {
+                        const pct =
+                          dStat.total > 0
+                            ? Math.round((dStat.correct / dStat.total) * 100)
+                            : 0;
+                        return (
+                          <div key={dom} className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                              <span className="font-medium text-slate-700">{dom}</span>
+                              <span className="font-mono text-slate-600">
+                                {dStat.correct}/{dStat.total} ({pct}%)
+                              </span>
+                            </div>
+                            <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                              <div
+                                className="h-full bg-[#2563eb] rounded-full"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      }
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : activeTab === 'study_plan' ? (
+          /* ADMIN AI STUDY PLAN MANAGEMENT */
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                  AI Study Plan Boshqaruvi ({platformContent.studyPlanTemplates.length})
+                </h1>
+                <p className="text-xs text-slate-500 mt-1">
+                  O‘quvchilarning «Today's plan» va «AI Study Plan» bo‘limlarida ko‘rinadigan kundalik o‘quv rejasi vazifalarini boshqarish.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddingPlanTask(!isAddingPlanTask)}
+                className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{isAddingPlanTask ? 'Bekor qilish' : 'Yangi Vazifa Qo‘shish'}</span>
+              </button>
+            </div>
+
+            {isAddingPlanTask && (
+              <form
+                onSubmit={handleAddPlanTemplate}
+                className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input
+                    type="text"
+                    required
+                    value={newPlanTitle}
+                    onChange={(e) => setNewPlanTitle(e.target.value)}
+                    placeholder="Vazifa nomi (masalan: Section 1: Reading Module 1)"
+                    className="sm:col-span-2 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                  />
+                  <input
+                    type="text"
+                    value={newPlanDuration}
+                    onChange={(e) => setNewPlanDuration(e.target.value)}
+                    placeholder="Vaqt (masalan: 32 min)"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <select
+                    value={newPlanModule}
+                    onChange={(e) => setNewPlanModule(e.target.value as ModuleId | '')}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs"
+                  >
+                    <option value="">Modulga bog‘lanmagan</option>
+                    <option value="rw_1">Reading & Writing M1</option>
+                    <option value="rw_2">Reading & Writing M2</option>
+                    <option value="math_1">Math M1</option>
+                    <option value="math_2">Math M2</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                  >
+                    Saqlash
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-3">
+              {platformContent.studyPlanTemplates.map((task) => (
+                <div
+                  key={task.id}
+                  className="flex items-center justify-between gap-4 p-3.5 rounded-xl border border-slate-200 hover:bg-slate-50"
+                >
+                  <div className="flex items-center gap-3">
+                    <Clock className="w-4 h-4 text-[#2563eb]" />
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">
+                        {task.title}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Davomiyligi: {task.duration}
+                        {task.moduleId
+                          ? ` · Modul: ${MODULE_CONFIGS[task.moduleId]?.shortTitle}`
+                          : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemovePlanTemplate(task.id)}
+                    className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 cursor-pointer"
+                    title="O‘chirish"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : activeTab === 'vocabulary' ? (
+          /* ADMIN VOCABULARY MANAGEMENT */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                SAT Vocabulary Boshqaruvi ({platformContent.vocabulary.length})
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                O‘quvchilar uchun SAT Words in Context lug‘at bazasiga yangi so‘zlar qo‘shish va tahrirlash.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newVocabWord.trim() || !newVocabDef.trim()) return;
+                updatePlatformContent({
+                  ...platformContent,
+                  vocabulary: [
+                    {
+                      id: `voc_${Date.now()}`,
+                      word: newVocabWord.trim(),
+                      part: newVocabPart.trim() || 'adjective',
+                      definition: newVocabDef.trim(),
+                      example: newVocabEx.trim(),
+                    },
+                    ...platformContent.vocabulary,
+                  ],
+                });
+                setNewVocabWord('');
+                setNewVocabDef('');
+                setNewVocabEx('');
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-3"
+            >
+              <div className="text-xs font-bold text-slate-900">
+                Yangi SAT so‘zini qo‘shish
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  required
+                  value={newVocabWord}
+                  onChange={(e) => setNewVocabWord(e.target.value)}
+                  placeholder="So‘z (masalan: Resilient)"
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                />
+                <input
+                  type="text"
+                  value={newVocabPart}
+                  onChange={(e) => setNewVocabPart(e.target.value)}
+                  placeholder="So‘z turkumi (adjective / verb / noun)"
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                />
+                <input
+                  type="text"
+                  required
+                  value={newVocabDef}
+                  onChange={(e) => setNewVocabDef(e.target.value)}
+                  placeholder="Ma’nosi (Definition)"
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="text"
+                  value={newVocabEx}
+                  onChange={(e) => setNewVocabEx(e.target.value)}
+                  placeholder="Misol gap (Example sentence)"
+                  className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                >
+                  + Qo‘shish
+                </button>
+              </div>
+            </form>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {platformContent.vocabulary.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 space-y-2 flex items-start justify-between gap-3"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-baseline gap-2">
+                      <h3 className="text-base font-bold text-slate-900">{item.word}</h3>
+                      <span className="text-xs italic text-[#2563eb]">{item.part}</span>
+                    </div>
+                    <p className="text-xs text-slate-700 font-medium">
+                      {item.definition}
+                    </p>
+                    {item.example && (
+                      <p className="text-xs text-slate-500 italic">“{item.example}”</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updatePlatformContent({
+                        ...platformContent,
+                        vocabulary: platformContent.vocabulary.filter(
+                          (v) => v.id !== item.id
+                        ),
+                      })
+                    }
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : activeTab === 'formula_sheet' ? (
+          /* ADMIN FORMULA SHEET MANAGEMENT */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                SAT Math Formula Sheet Boshqaruvi
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                O‘quvchilarning Formula Sheet bo‘limidagi matematik formulalar to‘plamini boshqarish.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newFormulaGroupTitle.trim() || !newFormulaGroupLines.trim()) return;
+                const lines = newFormulaGroupLines
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter(Boolean);
+                if (lines.length === 0) return;
+                updatePlatformContent({
+                  ...platformContent,
+                  formulaGroups: [
+                    ...platformContent.formulaGroups,
+                    {
+                      id: `fg_${Date.now()}`,
+                      title: newFormulaGroupTitle.trim(),
+                      formulas: lines,
+                    },
+                  ],
+                });
+                setNewFormulaGroupTitle('');
+                setNewFormulaGroupLines('');
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-3"
+            >
+              <div className="text-xs font-bold text-slate-900">
+                Yangi formulalar bo‘limini qo‘shish
+              </div>
+              <input
+                type="text"
+                required
+                value={newFormulaGroupTitle}
+                onChange={(e) => setNewFormulaGroupTitle(e.target.value)}
+                placeholder="Bo‘lim nomi (masalan: Quadratic & Exponential Equations)"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+              />
+              <textarea
+                rows={3}
+                required
+                value={newFormulaGroupLines}
+                onChange={(e) => setNewFormulaGroupLines(e.target.value)}
+                placeholder="Har bir qatorga bittadan formula yozing..."
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono"
+              />
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+                >
+                  + Bo‘limni saqlash
+                </button>
+              </div>
+            </form>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {platformContent.formulaGroups.map((grp) => (
+                <div
+                  key={grp.id}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-900">{grp.title}</h3>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updatePlatformContent({
+                          ...platformContent,
+                          formulaGroups: platformContent.formulaGroups.filter(
+                            (g) => g.id !== grp.id
+                          ),
+                        })
+                      }
+                      className="p-1 rounded-lg text-slate-400 hover:text-red-600 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <ul className="text-xs text-slate-700 space-y-1.5 font-mono">
+                    {grp.formulas.map((f, idx) => (
+                      <li key={idx}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : activeTab === 'referrals' ? (
+          /* ADMIN REFERRALS OVERVIEW */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                Referrals — O‘quvchilar Taklif Kodlari ({sessions.length})
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                Har bir o‘quvchiga biriktirilgan shaxsiy taklif (referral) kodlari ro‘yxati.
+              </p>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-500 font-bold">
+                    <th className="py-3 px-4">O‘quvchi</th>
+                    <th className="py-3 px-4">Elektron pochta</th>
+                    <th className="py-3 px-4">Referral Kod</th>
+                    <th className="py-3 px-4 text-right">To‘plangan Ball</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sessions.map((s) => (
+                    <tr key={s.id} className="hover:bg-slate-50">
+                      <td className="py-3 px-4 font-bold text-slate-900">{s.fullName}</td>
+                      <td className="py-3 px-4 text-slate-500">{s.email || '—'}</td>
+                      <td className="py-3 px-4 font-mono font-bold text-[#2563eb]">
+                        SAT-{s.id.slice(-6).toUpperCase()}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono">
+                        {Object.keys(s.answers || {}).length * 175} pts
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          /* ADMIN PROMOCODE MANAGEMENT */
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
+                Promocode Boshqaruvi ({platformContent.promocodes.length})
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">
+                O‘quvchilar Pro plan va bonus ballar olishi uchun ishlatadigan promokodlarni yaratish va o‘chirish.
+              </p>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newPromoCode.trim()) return;
+                updatePlatformContent({
+                  ...platformContent,
+                  promocodes: [
+                    {
+                      id: `prm_${Date.now()}`,
+                      code: newPromoCode.trim().toUpperCase(),
+                      planName: newPromoPlan.trim() || 'Pro plan',
+                      bonusPoints: Number(newPromoBonus) || 500,
+                      active: true,
+                    },
+                    ...platformContent.promocodes,
+                  ],
+                });
+                setNewPromoCode('');
+              }}
+              className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex flex-wrap items-center gap-3"
+            >
+              <input
+                type="text"
+                required
+                value={newPromoCode}
+                onChange={(e) => setNewPromoCode(e.target.value)}
+                placeholder="Yangi promokod (masalan: SAT2027)"
+                className="flex-1 min-w-[180px] px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono uppercase"
+              />
+              <input
+                type="text"
+                value={newPromoPlan}
+                onChange={(e) => setNewPromoPlan(e.target.value)}
+                placeholder="Tarif nomi (Pro plan)"
+                className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs"
+              />
+              <input
+                type="number"
+                value={newPromoBonus}
+                onChange={(e) => setNewPromoBonus(Number(e.target.value))}
+                placeholder="Bonus ball"
+                className="w-28 px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold cursor-pointer"
+              >
+                + Promokod Yaratish
+              </button>
+            </form>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {platformContent.promocodes.map((p) => (
+                <div
+                  key={p.id}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center justify-between"
+                >
+                  <div className="space-y-1">
+                    <div className="text-sm font-mono font-extrabold text-[#2563eb]">
+                      {p.code}
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {p.planName} · +{p.bonusPoints} bonus pts
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updatePlatformContent({
+                        ...platformContent,
+                        promocodes: platformContent.promocodes.filter(
+                          (item) => item.id !== p.id
+                        ),
+                      })
+                    }
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
