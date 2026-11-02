@@ -652,7 +652,80 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   }
 
   const isSprQuestion = currentQuestion?.type === 'spr';
-  const hasSplitPassage = Boolean(currentQuestion?.passage) || isSprQuestion;
+  const hasStimulusMediaInLeftPane =
+    Boolean(currentQuestion?.passage) ||
+    (!isMathSection &&
+      Boolean(
+        (currentQuestion?.tableData && currentQuestion.tableData.headers.length > 0) ||
+          currentQuestion?.imageUrl
+      ));
+  const hasSplitPassage = hasStimulusMediaInLeftPane || isSprQuestion;
+
+  const renderStimulusTableAndImage = (q: SATQuestion) => {
+    const hasTable = Boolean(q.tableData && q.tableData.headers.length > 0);
+    const hasImage = Boolean(q.imageUrl && q.imageUrl.trim());
+    if (!hasTable && !hasImage) return null;
+
+    return (
+      <div className="space-y-4 mb-4 max-w-2xl">
+        {hasTable && q.tableData && (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse border border-gray-800 text-[14px] sat-serif text-gray-900 bg-white">
+              <thead>
+                {q.tableData.title && (
+                  <tr className="bg-gray-100">
+                    <th
+                      colSpan={Math.max(1, q.tableData.headers.length)}
+                      className="border border-gray-800 px-3 py-2 text-center font-bold text-gray-900"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSATTextWithMath(q.tableData.title),
+                      }}
+                    />
+                  </tr>
+                )}
+                <tr className="bg-gray-100/80">
+                  {q.tableData.headers.map((hdr, hIdx) => (
+                    <th
+                      key={hIdx}
+                      className="border border-gray-800 px-3 py-2 text-left font-bold text-gray-900"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSATTextWithMath(hdr),
+                      }}
+                    />
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {q.tableData.rows.map((row, rIdx) => (
+                  <tr key={rIdx} className="even:bg-gray-50/40">
+                    {q.tableData!.headers.map((_, cIdx) => (
+                      <td
+                        key={cIdx}
+                        className="border border-gray-800 px-3 py-2 align-top text-gray-900"
+                        dangerouslySetInnerHTML={{
+                          __html: renderSATTextWithMath(row[cIdx] ?? ''),
+                        }}
+                      />
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {hasImage && q.imageUrl && (
+          <div className="flex justify-center">
+            <img
+              src={q.imageUrl}
+              alt="Question figure"
+              className="max-h-[320px] max-w-full w-auto object-contain rounded border border-gray-200 bg-white"
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -1094,6 +1167,8 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                   </div>
                 )}
 
+                {hasStimulusMediaInLeftPane && renderStimulusTableAndImage(currentQuestion)}
+
                 {currentQuestion.passage && (
                   <div
                     className={`font-serif ${
@@ -1349,6 +1424,8 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
 
         {/* Question Body Container */}
         <div className="pl-3 pr-1 space-y-5">
+          {!hasStimulusMediaInLeftPane && renderStimulusTableAndImage(currentQuestion)}
+
           {currentQuestion.mathEquation && currentQuestion.mathEquation.length > 0 && (
             <div className="py-2 text-center text-[17px] text-[#111111] space-y-2.5">
               {currentQuestion.mathEquation.map((eq, i) => (
@@ -1403,14 +1480,66 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                         {opt.id}
                       </span>
 
-                      <span
-                        className={`sat-serif text-[16px] leading-snug ${
-                          isEliminated ? 'text-gray-400' : 'text-[#111111]'
+                      <div
+                        className={`flex-1 min-w-0 space-y-2 ${
+                          isEliminated ? 'text-gray-400 opacity-60' : 'text-[#111111]'
                         }`}
-                        dangerouslySetInnerHTML={{
-                          __html: renderHighlightedHtml(opt.text, isMathSection),
-                        }}
-                      />
+                      >
+                        {opt.text && opt.text.trim().length > 0 && (
+                          <div
+                            className="sat-serif text-[16px] leading-snug"
+                            dangerouslySetInnerHTML={{
+                              __html: renderHighlightedHtml(opt.text, isMathSection),
+                            }}
+                          />
+                        )}
+
+                        {opt.tableData && opt.tableData.headers.length > 0 && (
+                          <div className="overflow-x-auto max-w-md">
+                            <table className="w-full border-collapse border border-gray-800 text-[13.5px] sat-serif text-gray-900 bg-white">
+                              <thead>
+                                {opt.tableData.title && (
+                                  <tr className="bg-gray-100">
+                                    <th
+                                      colSpan={Math.max(1, opt.tableData.headers.length)}
+                                      className="border border-gray-800 px-3 py-1.5 text-center font-bold text-gray-900"
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(opt.tableData.title, isMathSection),
+                                      }}
+                                    />
+                                  </tr>
+                                )}
+                                <tr className="bg-gray-100/80">
+                                  {opt.tableData.headers.map((hdr, hIdx) => (
+                                    <th
+                                      key={hIdx}
+                                      className="border border-gray-800 px-3 py-1.5 text-center font-bold text-gray-900"
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(hdr, true),
+                                      }}
+                                    />
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {opt.tableData.rows.map((row, rIdx) => (
+                                  <tr key={rIdx} className="even:bg-gray-50/40">
+                                    {opt.tableData!.headers.map((_, cIdx) => (
+                                      <td
+                                        key={cIdx}
+                                        className="border border-gray-800 px-3 py-1.5 text-center align-middle text-gray-900"
+                                        dangerouslySetInnerHTML={{
+                                          __html: renderSATTextWithMath(row[cIdx] ?? '', true),
+                                        }}
+                                      />
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
                     </button>
 
                     {eliminatorMode && (

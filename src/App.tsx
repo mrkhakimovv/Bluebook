@@ -5,8 +5,12 @@ import {
   MODULE_CONFIGS,
   MODULE_ORDER,
   ModuleId,
+  QuestionVariant,
   ScoringConfig,
   DEFAULT_SCORING_CONFIG,
+  PracticeTest,
+  DEFAULT_PRACTICE_TEST,
+  DEFAULT_PRACTICE_TEST_ID,
 } from './types/sat';
 import {
   generateDefaultQuestions,
@@ -18,12 +22,15 @@ import {
   subscribeToSessions,
   subscribeToQuestions,
   subscribeToScoringConfig,
+  subscribeToPracticeTests,
   saveSessionToFirestore,
   saveBatchSessionsToFirestore,
   removeSessionFromFirestore,
   applyQuestionChanges,
   saveScoringConfig,
   saveItemParams,
+  savePracticeTestToFirestore,
+  removePracticeTestFromFirestore,
   CalibratedItemParamInput,
 } from './firebase';
 import {
@@ -36,6 +43,7 @@ import {
   toDeterministicSevenCharId,
   generateSevenCharQuestionId,
   redistributeQuestionsByDifficultyAndPosition,
+  consolidateSectionQuestionsToModule,
 } from './utils/questionValidation';
 import { LoginView } from './components/LoginView';
 import { BluebookExamView } from './components/BluebookExamView';
@@ -55,6 +63,9 @@ export default function App() {
   const [scoringConfig, setScoringConfig] = useState<ScoringConfig>(
     DEFAULT_SCORING_CONFIG
   );
+  const [practiceTests, setPracticeTests] = useState<PracticeTest[]>([
+    DEFAULT_PRACTICE_TEST,
+  ]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -77,6 +88,9 @@ export default function App() {
         .filter((q) => q.moduleId === modId)
         .sort(
           (a, b) =>
+            (a.testId || DEFAULT_PRACTICE_TEST_ID).localeCompare(
+              b.testId || DEFAULT_PRACTICE_TEST_ID
+            ) ||
             (a.variant || '').localeCompare(b.variant || '') ||
             a.number - b.number ||
             a.id.localeCompare(b.id)
@@ -215,6 +229,47 @@ export default function App() {
         }
       }
 
+      // Auto-repair single-module batches (<= 22 Math or <= 27 R&W) that were unintentionally split in half across M1 and M2
+      const allNormalized = Array.from(map.values());
+      const byTest = new Map<string, SATQuestion[]>();
+      for (const q of allNormalized) {
+        const tId = q.testId || DEFAULT_PRACTICE_TEST_ID;
+        const arr = byTest.get(tId) || [];
+        arr.push(q);
+        byTest.set(tId, arr);
+      }
+
+      for (const [tId, tQuestions] of byTest.entries()) {
+        for (const sec of ['rw', 'math'] as const) {
+          const m1Id: ModuleId = sec === 'rw' ? 'rw_1' : 'math_1';
+          const m2Id: ModuleId = sec === 'rw' ? 'rw_2' : 'math_2';
+          const maxMod = sec === 'rw' ? 27 : 22;
+          const m1Qs = tQuestions.filter((q) => q.moduleId === m1Id);
+          const m2Qs = tQuestions.filter((q) => q.moduleId === m2Id);
+          const totalSec = m1Qs.length + m2Qs.length;
+          const repairKey = `consolidated_${tId}_${sec}`;
+
+          if (
+            totalSec > 1 &&
+            totalSec <= maxMod &&
+            m1Qs.length > 0 &&
+            m2Qs.length > 0 &&
+            !migratingIdsRef.current.has(repairKey)
+          ) {
+            migratingIdsRef.current.add(repairKey);
+            const consolidated = consolidateSectionQuestionsToModule(
+              tQuestions,
+              sec,
+              m1Id
+            );
+            for (const cq of consolidated) {
+              map.set(cq.id, cq);
+              toMigrateSave.push(cq);
+            }
+          }
+        }
+      }
+
       setFsQuestions(Array.from(map.values()));
 
       if (toMigrateSave.length > 0) {
@@ -228,10 +283,22 @@ export default function App() {
       setScoringConfig(cfg);
     });
 
+    const unsubPracticeTests = subscribeToPracticeTests((fsTests) => {
+      if (fsTests.length === 0) {
+        setPracticeTests([DEFAULT_PRACTICE_TEST]);
+      } else {
+        const hasDefault = fsTests.some((t) => t.id === DEFAULT_PRACTICE_TEST_ID);
+        setPracticeTests(
+          hasDefault ? fsTests : [DEFAULT_PRACTICE_TEST, ...fsTests]
+        );
+      }
+    });
+
     return () => {
       unsubSessions();
       unsubQuestions();
       unsubScoringConfig();
+      unsubPracticeTests();
     };
   }, [normalizeSessionQuestionIds]);
 
@@ -262,8 +329,12 @@ export default function App() {
 
   const activeVariantQuestions = useMemo(() => {
     if (!activeSession) return questions;
-    return getSessionVariantQuestions(questions, activeSession.id);
-  }, [questions, activeSession?.id]);
+    return getSessionVariantQuestions(
+      questions,
+      activeSession.id,
+      activeSession.testId
+    );
+  }, [questions, activeSession?.id, activeSession?.testId]);
 
   const handleLogin = async (
     emailOrIdentifier: string,
@@ -566,7 +637,8 @@ export default function App() {
 
       const variantQs = getSessionVariantQuestions(
         questionsRef.current,
-        currentId
+        currentId,
+        latestActive.testId
       );
       const newScore = calculateSATScore(
         variantQs,
@@ -632,7 +704,8 @@ export default function App() {
     const now = new Date().toISOString();
     const variantQs = getSessionVariantQuestions(
       questionsRef.current,
-      sessionId
+      sessionId,
+      target.testId
     );
     const activeMods = getActiveModulesForQuestions(variantQs);
     const firstModule: ModuleId = activeMods[0] || 'rw_1';
@@ -713,17 +786,23 @@ export default function App() {
       throw new Error(err);
     }
 
+    const targetTestId = normalized.testId || DEFAULT_PRACTICE_TEST_ID;
     const modId = normalized.moduleId;
     const groupKey = getModuleVariantKey(modId, normalized.variant);
     const hasAnyFs = fsQuestionsRef.current.length > 0;
     const allCurrentQuestions = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
     const currentGroupQuestions = allCurrentQuestions
-      .filter((q) => getModuleVariantKey(q.moduleId, q.variant) === groupKey)
+      .filter(
+        (q) =>
+          (q.testId || DEFAULT_PRACTICE_TEST_ID) === targetTestId &&
+          getModuleVariantKey(q.moduleId, q.variant) === groupKey
+      )
       .sort((a, b) => a.number - b.number);
 
     const usedIds = new Set<string>(allCurrentQuestions.map((q) => q.id));
     const created: SATQuestion = {
       ...normalized,
+      testId: targetTestId,
       id: generateSevenCharQuestionId(usedIds),
       number: currentGroupQuestions.length + 1,
     };
@@ -746,16 +825,20 @@ export default function App() {
     const target = questionsRef.current.find((q) => q.id === questionId);
     if (!target) return;
 
+    const targetTestId = target.testId || DEFAULT_PRACTICE_TEST_ID;
     const groupKey = getModuleVariantKey(target.moduleId, target.variant);
     const hasAnyFs = fsQuestionsRef.current.length > 0;
     const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
 
     const otherQuestions = baseAll.filter(
-      (q) => getModuleVariantKey(q.moduleId, q.variant) !== groupKey
+      (q) =>
+        (q.testId || DEFAULT_PRACTICE_TEST_ID) !== targetTestId ||
+        getModuleVariantKey(q.moduleId, q.variant) !== groupKey
     );
     const remainingInGroup = baseAll
       .filter(
         (q) =>
+          (q.testId || DEFAULT_PRACTICE_TEST_ID) === targetTestId &&
           getModuleVariantKey(q.moduleId, q.variant) === groupKey &&
           q.id !== questionId
       )
@@ -782,14 +865,20 @@ export default function App() {
 
   const handleImportQuestions = async (
     items: Omit<SATQuestion, 'id' | 'number'>[],
-    mode: 'replace_all' | 'append' = 'replace_all'
+    mode: 'replace_all' | 'append' = 'replace_all',
+    targetTestId: string = DEFAULT_PRACTICE_TEST_ID
   ) => {
     if (items.length === 0) return;
+
+    const cleanTestId = targetTestId || DEFAULT_PRACTICE_TEST_ID;
 
     // Group by (moduleId, variant) pair so importing e.g. rw_2/hard does not delete rw_2/easy
     const byGroup = new Map<string, Omit<SATQuestion, 'id' | 'number'>[]>();
     for (const item of items) {
-      const normalized = normalizeQuestionInput(item);
+      const normalized = normalizeQuestionInput({
+        ...item,
+        testId: item.testId || cleanTestId,
+      });
       const err = validateQuestionInput(normalized);
       if (err) {
         throw new Error(err);
@@ -805,7 +894,6 @@ export default function App() {
 
     if (mode === 'replace_all') {
       const replaceGroupKeys = new Set<string>(byGroup.keys());
-      // If replacing both easy & hard variants of a Stage 2 module (or M1 + M2), also clear un-split common M2 questions
       if (
         (replaceGroupKeys.has('rw_2:easy') && replaceGroupKeys.has('rw_2:hard')) ||
         (replaceGroupKeys.has('rw_1') &&
@@ -821,11 +909,15 @@ export default function App() {
         replaceGroupKeys.add('math_2');
       }
 
-      const existingInImportedGroups = fsQuestionsRef.current.filter((q) =>
-        replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
+      const existingInImportedGroups = fsQuestionsRef.current.filter(
+        (q) =>
+          (q.testId || DEFAULT_PRACTICE_TEST_ID) === cleanTestId &&
+          replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
       );
       const keptQuestions = fsQuestionsRef.current.filter(
-        (q) => !replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
+        (q) =>
+          (q.testId || DEFAULT_PRACTICE_TEST_ID) !== cleanTestId ||
+          !replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
       );
       const usedIds = new Set<string>(keptQuestions.map((q) => q.id));
 
@@ -837,6 +929,7 @@ export default function App() {
           newSavedIds.add(id);
           toSave.push({
             ...item,
+            testId: cleanTestId,
             id,
             number: num,
           });
@@ -853,7 +946,10 @@ export default function App() {
       setFsQuestions((prev) => {
         const map = new Map<string, SATQuestion>();
         for (const q of prev) {
-          if (!replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))) {
+          if (
+            (q.testId || DEFAULT_PRACTICE_TEST_ID) !== cleanTestId ||
+            !replaceGroupKeys.has(getModuleVariantKey(q.moduleId, q.variant))
+          ) {
             map.set(q.id, q);
           }
         }
@@ -867,13 +963,16 @@ export default function App() {
       const usedIds = new Set<string>(baseExisting.map((q) => q.id));
       for (const [gKey, groupItems] of byGroup.entries()) {
         const existingCount = baseExisting.filter(
-          (q) => getModuleVariantKey(q.moduleId, q.variant) === gKey
+          (q) =>
+            (q.testId || DEFAULT_PRACTICE_TEST_ID) === cleanTestId &&
+            getModuleVariantKey(q.moduleId, q.variant) === gKey
         ).length;
         groupItems.forEach((item, idx) => {
           const num = existingCount + idx + 1;
           const id = generateSevenCharQuestionId(usedIds);
           toSave.push({
             ...item,
+            testId: cleanTestId,
             id,
             number: num,
           });
@@ -890,15 +989,29 @@ export default function App() {
     }
   };
 
-  const handleRedistributeSectionQuestions = async (section: 'rw' | 'math') => {
+  const handleRedistributeSectionQuestions = async (
+    section: 'rw' | 'math',
+    targetTestId: string = DEFAULT_PRACTICE_TEST_ID
+  ) => {
+    const cleanTestId = targetTestId || DEFAULT_PRACTICE_TEST_ID;
     const hasAnyFs = fsQuestionsRef.current.length > 0;
     const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
-    const redistributed = redistributeQuestionsByDifficultyAndPosition(baseAll, section);
+    const testQuestions = baseAll.filter(
+      (q) => (q.testId || DEFAULT_PRACTICE_TEST_ID) === cleanTestId
+    );
+    const redistributed = redistributeQuestionsByDifficultyAndPosition(
+      testQuestions,
+      section
+    ).map((q) => ({ ...q, testId: cleanTestId }));
     if (redistributed.length === 0) return;
 
     const secPrefix = section === 'rw' ? 'rw_' : 'math_';
-    const otherSectionQuestions = baseAll.filter((q) => !q.moduleId.startsWith(secPrefix));
-    const toSave = hasAnyFs ? redistributed : [...otherSectionQuestions, ...redistributed];
+    const otherQuestions = baseAll.filter(
+      (q) =>
+        (q.testId || DEFAULT_PRACTICE_TEST_ID) !== cleanTestId ||
+        !q.moduleId.startsWith(secPrefix)
+    );
+    const toSave = hasAnyFs ? redistributed : [...otherQuestions, ...redistributed];
 
     await applyQuestionChanges(toSave, []);
     setFsQuestions((prev) => {
@@ -907,6 +1020,109 @@ export default function App() {
       for (const q of toSave) map.set(q.id, q);
       return Array.from(map.values());
     });
+  };
+
+  const handleSavePracticeTest = async (
+    test: PracticeTest,
+    copyFromTestId?: string
+  ) => {
+    await savePracticeTestToFirestore(test);
+    setPracticeTests((prev) => {
+      const exists = prev.some((t) => t.id === test.id);
+      if (exists) {
+        return prev.map((t) => (t.id === test.id ? test : t));
+      }
+      return [...prev, test];
+    });
+
+    if (copyFromTestId) {
+      const hasAnyFs = fsQuestionsRef.current.length > 0;
+      const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
+      const sourceQs = baseAll.filter(
+        (q) => (q.testId || DEFAULT_PRACTICE_TEST_ID) === copyFromTestId
+      );
+      if (sourceQs.length > 0) {
+        const usedIds = new Set<string>(baseAll.map((q) => q.id));
+        const clonedQs: SATQuestion[] = sourceQs.map((q) => ({
+          ...q,
+          id: generateSevenCharQuestionId(usedIds),
+          testId: test.id,
+        }));
+        const toSave = hasAnyFs ? clonedQs : [...baseAll, ...clonedQs];
+        await applyQuestionChanges(toSave, []);
+        setFsQuestions((prev) => {
+          const map = new Map<string, SATQuestion>();
+          for (const q of prev) map.set(q.id, q);
+          for (const q of toSave) map.set(q.id, q);
+          return Array.from(map.values());
+        });
+      }
+    }
+  };
+
+  const handleDeletePracticeTest = async (testId: string) => {
+    if (testId === DEFAULT_PRACTICE_TEST_ID) return;
+    await removePracticeTestFromFirestore(testId);
+    setPracticeTests((prev) => prev.filter((t) => t.id !== testId));
+
+    const testQuestionIds = fsQuestionsRef.current
+      .filter((q) => q.testId === testId)
+      .map((q) => q.id);
+    if (testQuestionIds.length > 0) {
+      await applyQuestionChanges([], testQuestionIds);
+      setFsQuestions((prev) => prev.filter((q) => q.testId !== testId));
+    }
+  };
+
+  const handleSelectStudentPracticeTest = async (testId: string) => {
+    if (!activeSession) return;
+    const targetTest =
+      practiceTests.find((t) => t.id === testId) || DEFAULT_PRACTICE_TEST;
+    const now = new Date().toISOString();
+    const variantQs = getSessionVariantQuestions(
+      questionsRef.current,
+      activeSession.id,
+      testId
+    );
+    const activeMods = getActiveModulesForQuestions(variantQs);
+    const firstModule: ModuleId = activeMods[0] || 'rw_1';
+
+    const rwDurSec = (targetTest.rwDurationMinutes || 32) * 60;
+    const mathDurSec = (targetTest.mathDurationMinutes || 35) * 60;
+
+    const updatedSession: StudentSession = {
+      ...activeSession,
+      testId,
+      status: 'in_progress',
+      currentModule: firstModule,
+      currentQuestionIndex: 0,
+      viewMode: 'question',
+      answers: {},
+      flagged: {},
+      eliminated: {},
+      highlights: [],
+      moduleTimeRemaining: {
+        rw_1: rwDurSec,
+        rw_2: rwDurSec,
+        math_1: mathDurSec,
+        math_2: mathDurSec,
+      },
+      completedModules: [],
+      routing: undefined,
+      routingTheta: undefined,
+      result: undefined,
+      startedAt: now,
+      updatedAt: now,
+      completedAt: undefined,
+      score: calculateSATScore(variantQs, {}, scoringConfigRef.current),
+    };
+
+    sessionsRef.current = sessionsRef.current.map((s) =>
+      s.id === activeSession.id ? updatedSession : s
+    );
+    setSessions(sessionsRef.current);
+    setViewingResultEarly(false);
+    await saveSessionToFirestore(updatedSession);
   };
 
   const handleSaveScoringConfig = async (
@@ -930,7 +1146,7 @@ export default function App() {
 
     const updatedSessions: StudentSession[] = [];
     const nextAllSessions = currentSessions.map((s) => {
-      const variantQs = getSessionVariantQuestions(allQs, s.id);
+      const variantQs = getSessionVariantQuestions(allQs, s.id, s.testId);
       const nextScore = calculateSATScore(
         variantQs,
         s.answers || {},
@@ -1004,23 +1220,64 @@ export default function App() {
     return res;
   };
 
+  const handleConsolidateSectionToModule = async (
+    section: 'rw' | 'math',
+    targetModuleId: ModuleId,
+    targetVariant?: QuestionVariant,
+    targetTestId: string = DEFAULT_PRACTICE_TEST_ID
+  ) => {
+    const cleanTestId = targetTestId || DEFAULT_PRACTICE_TEST_ID;
+    const hasAnyFs = fsQuestionsRef.current.length > 0;
+    const baseAll = hasAnyFs ? fsQuestionsRef.current : questionsRef.current;
+    const testQuestions = baseAll.filter(
+      (q) => (q.testId || DEFAULT_PRACTICE_TEST_ID) === cleanTestId
+    );
+    const consolidated = consolidateSectionQuestionsToModule(
+      testQuestions,
+      section,
+      targetModuleId,
+      targetVariant
+    ).map((q) => ({ ...q, testId: cleanTestId }));
+    if (consolidated.length === 0) return;
+
+    const secPrefix = section === 'rw' ? 'rw_' : 'math_';
+    const otherQuestions = baseAll.filter(
+      (q) =>
+        (q.testId || DEFAULT_PRACTICE_TEST_ID) !== cleanTestId ||
+        !q.moduleId.startsWith(secPrefix)
+    );
+    const toSave = hasAnyFs ? consolidated : [...otherQuestions, ...consolidated];
+
+    await applyQuestionChanges(toSave, []);
+    setFsQuestions((prev) => {
+      const map = new Map<string, SATQuestion>();
+      for (const q of prev) map.set(q.id, q);
+      for (const q of toSave) map.set(q.id, q);
+      return Array.from(map.values());
+    });
+  };
+
   if (role === 'admin') {
     return (
       <AdminDashboard
         adminName={adminName}
         sessions={sessions}
         questions={questions}
+        practiceTests={practiceTests}
         scoringConfig={scoringConfig}
         onDeleteSession={handleDeleteSession}
         onResetSession={handleResetSession}
         onCreateStudentAccount={(fullName, email, password) =>
           handleRegisterAccount(fullName, email, password, false)
         }
+        onSavePracticeTest={handleSavePracticeTest}
+        onDeletePracticeTest={handleDeletePracticeTest}
         onUpdateQuestion={handleUpdateQuestion}
         onAddQuestion={handleAddQuestion}
         onDeleteQuestion={handleDeleteQuestion}
         onImportQuestions={handleImportQuestions}
         onRedistributeSectionQuestions={handleRedistributeSectionQuestions}
+        onConsolidateSectionToModule={handleConsolidateSectionToModule}
         onSaveScoringConfig={handleSaveScoringConfig}
         onRecalculateAllSessions={handleRecalculateAllSessions}
         onImportItemParams={handleImportItemParams}
@@ -1039,7 +1296,9 @@ export default function App() {
           session={activeSession}
           allSessions={sessions}
           questions={activeVariantQuestions}
+          practiceTests={practiceTests}
           scoringConfig={scoringConfig}
+          onSelectPracticeTest={handleSelectStudentPracticeTest}
           onStartExam={() => {
             setViewingResultEarly(false);
             setStudentScreen(

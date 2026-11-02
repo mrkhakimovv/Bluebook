@@ -36,10 +36,13 @@ import {
   Menu,
   UserPlus,
   Clock,
+  Image as ImageIcon,
+  Table as TableIcon,
 } from 'lucide-react';
 import {
   StudentSession,
   SATQuestion,
+  QuestionTableData,
   MODULE_CONFIGS,
   MODULE_ORDER,
   ModuleId,
@@ -48,6 +51,9 @@ import {
   QuestionVariant,
   ScoringConfig,
   domainsForModule,
+  PracticeTest,
+  DEFAULT_PRACTICE_TEST_ID,
+  DEFAULT_PRACTICE_TEST,
 } from '../types/sat';
 import { isAnswerCorrect } from '../data/defaultQuestions';
 import {
@@ -63,9 +69,15 @@ import {
   normalizeQuestionInput,
   validateQuestionInput,
   parseQuestionImport,
+  parseTextToTableData,
+  parseTablePromptToData,
+  formatTableDataToPrompt,
+  SAMPLE_TABLE_PROMPT,
+  SAMPLE_OPTION_TABLE_PROMPT,
   QuestionImportResult,
   ImportPlacementTarget,
   getSessionVariantQuestions,
+  getQuestionsForPracticeTest,
   formatModuleVariantLabel,
 } from '../utils/questionValidation';
 import {
@@ -91,6 +103,7 @@ interface AdminDashboardProps {
   adminName: string;
   sessions: StudentSession[];
   questions: SATQuestion[];
+  practiceTests?: PracticeTest[];
   scoringConfig: ScoringConfig;
   onDeleteSession: (id: string) => Promise<void>;
   onResetSession: (id: string) => Promise<void>;
@@ -99,14 +112,29 @@ interface AdminDashboardProps {
     email: string,
     password: string
   ) => Promise<{ ok: boolean; message?: string }>;
+  onSavePracticeTest?: (
+    test: PracticeTest,
+    cloneFromTestId?: string
+  ) => Promise<void>;
+  onDeletePracticeTest?: (testId: string) => Promise<void>;
   onUpdateQuestion: (q: SATQuestion) => Promise<void>;
   onAddQuestion: (q: Omit<SATQuestion, 'id' | 'number'>) => Promise<void>;
   onDeleteQuestion: (id: string) => Promise<void>;
   onImportQuestions: (
     items: Omit<SATQuestion, 'id' | 'number'>[],
-    mode: 'replace_all' | 'append'
+    mode: 'replace_all' | 'append',
+    targetTestId?: string
   ) => Promise<void>;
-  onRedistributeSectionQuestions?: (section: 'rw' | 'math') => Promise<void>;
+  onRedistributeSectionQuestions?: (
+    section: 'rw' | 'math',
+    targetTestId?: string
+  ) => Promise<void>;
+  onConsolidateSectionToModule?: (
+    section: 'rw' | 'math',
+    targetModuleId: ModuleId,
+    targetVariant?: QuestionVariant,
+    targetTestId?: string
+  ) => Promise<void>;
   onSaveScoringConfig: (
     cfg: Omit<ScoringConfig, 'version' | 'updatedAt'>
   ) => Promise<void>;
@@ -121,15 +149,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   adminName,
   sessions,
   questions,
+  practiceTests,
   scoringConfig,
   onDeleteSession,
   onResetSession,
   onCreateStudentAccount,
+  onSavePracticeTest,
+  onDeletePracticeTest,
   onUpdateQuestion,
   onAddQuestion,
   onDeleteQuestion,
   onImportQuestions,
   onRedistributeSectionQuestions,
+  onConsolidateSectionToModule,
   onSaveScoringConfig,
   onRecalculateAllSessions,
   onImportItemParams,
@@ -185,6 +217,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'in_progress' | 'completed'>('all');
+  const [resultsPracticeTestFilter, setResultsPracticeTestFilter] = useState<'all' | string>('all');
+  const [selectedPracticeTestId, setSelectedPracticeTestId] = useState<string>(
+    DEFAULT_PRACTICE_TEST_ID
+  );
   const [inspectedSessionId, setInspectedSessionId] = useState<string | null>(null);
   const [selectedModuleFilter, setSelectedModuleFilter] = useState<ModuleId>('rw_1');
   const [selectedVariantFilter, setSelectedVariantFilter] = useState<
@@ -193,6 +229,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [hasManuallySelectedSection, setHasManuallySelectedSection] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<SATQuestion | null>(null);
   const [isCreatingQuestion, setIsCreatingQuestion] = useState(false);
+
+  // Practice Test Create / Edit Modal State
+  const [isPracticeTestModalOpen, setIsPracticeTestModalOpen] = useState(false);
+  const [editingPracticeTest, setEditingPracticeTest] = useState<PracticeTest | null>(null);
+  const [ptTitle, setPtTitle] = useState('');
+  const [ptDescription, setPtDescription] = useState('');
+  const [ptStatus, setPtStatus] = useState<'active' | 'draft'>('active');
+  const [ptRwMinutes, setPtRwMinutes] = useState(32);
+  const [ptMathMinutes, setPtMathMinutes] = useState(35);
+  const [ptCloneFromId, setPtCloneFromId] = useState<string>('');
+  const [isSavingPracticeTest, setIsSavingPracticeTest] = useState(false);
+  const [practiceTestModalError, setPracticeTestModalError] = useState<string | null>(null);
+  const [confirmDeleteTestId, setConfirmDeleteTestId] = useState<string | null>(null);
+  const [deletingTestId, setDeletingTestId] = useState<string | null>(null);
+  const [updatingStatusTestId, setUpdatingStatusTestId] = useState<string | null>(null);
 
   // Two-step delete confirmation state (no window.confirm)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -217,8 +268,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [newQOptB, setNewQOptB] = useState('');
   const [newQOptC, setNewQOptC] = useState('');
   const [newQOptD, setNewQOptD] = useState('');
+  const [newQOptTables, setNewQOptTables] = useState<
+    Partial<Record<'A' | 'B' | 'C' | 'D', QuestionTableData>>
+  >({});
   const [newQCorrect, setNewQCorrect] = useState('A');
   const [newQExplanation, setNewQExplanation] = useState('');
+  const [newQImageUrl, setNewQImageUrl] = useState('');
+  const [newQTableData, setNewQTableData] = useState<QuestionTableData | undefined>(
+    undefined
+  );
+
+  // Table Prompt & Clipboard Image Paste States
+  const [tableInputMode, setTableInputMode] = useState<'prompt' | 'grid'>('prompt');
+  const [tablePromptText, setTablePromptText] = useState<string>('');
+  const [imagePasteStatus, setImagePasteStatus] = useState<string | null>(null);
+  const [optionTableEditors, setOptionTableEditors] = useState<
+    Partial<
+      Record<
+        'A' | 'B' | 'C' | 'D',
+        { open: boolean; mode: 'prompt' | 'grid'; promptText: string }
+      >
+    >
+  >({});
 
   // JSON Import Modal State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -279,26 +350,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setCfgProvHard(scoringConfig.provisionalB.hard);
   }, [scoringConfig]);
 
+  const effectivePracticeTests = useMemo<PracticeTest[]>(() => {
+    if (practiceTests && practiceTests.length > 0) {
+      return practiceTests;
+    }
+    return [DEFAULT_PRACTICE_TEST];
+  }, [practiceTests]);
+
+  const activeTestQuestions = useMemo(
+    () => getQuestionsForPracticeTest(questions, selectedPracticeTestId),
+    [questions, selectedPracticeTestId]
+  );
+
   const selectedSection: 'rw' | 'math' = selectedModuleFilter.startsWith('rw_')
     ? 'rw'
     : 'math';
   const selectedSubModuleNumber: 1 | 2 = selectedModuleFilter.endsWith('_2') ? 2 : 1;
 
   const rw1Count = useMemo(
-    () => questions.filter((q) => q.moduleId === 'rw_1').length,
-    [questions]
+    () => activeTestQuestions.filter((q) => q.moduleId === 'rw_1').length,
+    [activeTestQuestions]
   );
   const rw2Count = useMemo(
-    () => questions.filter((q) => q.moduleId === 'rw_2').length,
-    [questions]
+    () => activeTestQuestions.filter((q) => q.moduleId === 'rw_2').length,
+    [activeTestQuestions]
   );
   const math1Count = useMemo(
-    () => questions.filter((q) => q.moduleId === 'math_1').length,
-    [questions]
+    () => activeTestQuestions.filter((q) => q.moduleId === 'math_1').length,
+    [activeTestQuestions]
   );
   const math2Count = useMemo(
-    () => questions.filter((q) => q.moduleId === 'math_2').length,
-    [questions]
+    () => activeTestQuestions.filter((q) => q.moduleId === 'math_2').length,
+    [activeTestQuestions]
   );
   const rwTotalCount = rw1Count + rw2Count;
   const mathTotalCount = math1Count + math2Count;
@@ -315,43 +398,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     const rw1 = computeStat(
-      questions.filter((q) => q.moduleId === 'rw_1'),
+      activeTestQuestions.filter((q) => q.moduleId === 'rw_1'),
       27,
       25
     );
     const rw2Easy = computeStat(
-      questions.filter((q) => q.moduleId === 'rw_2' && q.variant === 'easy'),
+      activeTestQuestions.filter((q) => q.moduleId === 'rw_2' && q.variant === 'easy'),
       27,
       25
     );
     const rw2Hard = computeStat(
-      questions.filter((q) => q.moduleId === 'rw_2' && q.variant === 'hard'),
+      activeTestQuestions.filter((q) => q.moduleId === 'rw_2' && q.variant === 'hard'),
       27,
       25
     );
     const rw2Common = computeStat(
-      questions.filter((q) => q.moduleId === 'rw_2' && !q.variant),
+      activeTestQuestions.filter((q) => q.moduleId === 'rw_2' && !q.variant),
       27,
       25
     );
 
     const math1 = computeStat(
-      questions.filter((q) => q.moduleId === 'math_1'),
+      activeTestQuestions.filter((q) => q.moduleId === 'math_1'),
       22,
       20
     );
     const math2Easy = computeStat(
-      questions.filter((q) => q.moduleId === 'math_2' && q.variant === 'easy'),
+      activeTestQuestions.filter((q) => q.moduleId === 'math_2' && q.variant === 'easy'),
       22,
       20
     );
     const math2Hard = computeStat(
-      questions.filter((q) => q.moduleId === 'math_2' && q.variant === 'hard'),
+      activeTestQuestions.filter((q) => q.moduleId === 'math_2' && q.variant === 'hard'),
       22,
       20
     );
     const math2Common = computeStat(
-      questions.filter((q) => q.moduleId === 'math_2' && !q.variant),
+      activeTestQuestions.filter((q) => q.moduleId === 'math_2' && !q.variant),
       22,
       20
     );
@@ -366,9 +449,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       math_2_hard: math2Hard,
       math_2_common: math2Common,
     };
-  }, [questions]);
+  }, [activeTestQuestions]);
 
-  const stage2Warnings = useMemo(() => getStage2RoutingWarnings(questions), [questions]);
+  const stage2Warnings = useMemo(
+    () => getStage2RoutingWarnings(activeTestQuestions),
+    [activeTestQuestions]
+  );
 
   useEffect(() => {
     if (!hasManuallySelectedSection) {
@@ -419,20 +505,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSelectedModuleFilter(nextMod);
   };
 
-  const filteredSessions = sessions.filter((s) => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      s.fullName.toLowerCase().includes(q) ||
-      (s.email && s.email.toLowerCase().includes(q)) ||
-      s.password.toLowerCase().includes(q);
-    const matchesStatus =
-      statusFilter === 'all' ||
-      (statusFilter === 'completed'
-        ? s.status === 'completed'
-        : s.status !== 'completed');
-    return matchesSearch && matchesStatus;
-  });
-
   // Helper to check section completion for a session
   const isSectionCompleted = (s: StudentSession, sec: 'rw' | 'math') => {
     if (s.status === 'completed') return true;
@@ -444,12 +516,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (s.result && s.result.rw && s.result.math) {
       return s.result;
     }
-    const variantQs = getSessionVariantQuestions(questions, s.id);
+    const variantQs = getSessionVariantQuestions(
+      questions,
+      s.id,
+      s.testId || DEFAULT_PRACTICE_TEST_ID
+    );
     return scoreSession(s, variantQs, scoringConfig);
   };
 
   const getSessionEffectiveRouting = (s: StudentSession) => {
-    const variantQs = getSessionVariantQuestions(questions, s.id);
+    const variantQs = getSessionVariantQuestions(
+      questions,
+      s.id,
+      s.testId || DEFAULT_PRACTICE_TEST_ID
+    );
     const rwStage1 = computeStage1Routing('rw', variantQs, s.answers || {}, scoringConfig);
     const mathStage1 = computeStage1Routing(
       'math',
@@ -465,9 +545,139 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   };
 
-  const totalStudents = sessions.length;
-  const activeStudents = sessions.filter((s) => s.status !== 'completed').length;
-  const completedSessions = sessions.filter(
+  // Dedicated statistics per Practice Test
+  const practiceTestStatsMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        test: PracticeTest;
+        totalQuestionsCount: number;
+        rwQuestionsCount: number;
+        mathQuestionsCount: number;
+        totalAttempts: number;
+        activeCount: number;
+        completedCount: number;
+        avgScore: number;
+        maxScore: number;
+        avgRwScore: number;
+        avgMathScore: number;
+        accuracyPercent: number;
+      }
+    >();
+
+    const qLookup = new Map<string, SATQuestion>();
+    for (const q of questions) {
+      qLookup.set(q.id, q);
+    }
+
+    for (const pt of effectivePracticeTests) {
+      const testQs = getQuestionsForPracticeTest(questions, pt.id);
+      const rwQs = testQs.filter((q) => q.moduleId.startsWith('rw_')).length;
+      const mathQs = testQs.filter((q) => q.moduleId.startsWith('math_')).length;
+
+      const testSessions = sessions.filter(
+        (s) => (s.testId || DEFAULT_PRACTICE_TEST_ID) === pt.id
+      );
+      const activeCount = testSessions.filter((s) => s.status !== 'completed').length;
+      const completed = testSessions.filter(
+        (s) =>
+          s.status === 'completed' ||
+          (isSectionCompleted(s, 'rw') && isSectionCompleted(s, 'math'))
+      );
+
+      const avgScore =
+        completed.length > 0
+          ? Math.round(
+              completed.reduce(
+                (acc, s) => acc + (s.result?.total ?? s.score.total),
+                0
+              ) / completed.length
+            )
+          : 0;
+      const maxScore =
+        completed.length > 0
+          ? Math.max(...completed.map((s) => s.result?.total ?? s.score.total))
+          : 0;
+      const avgRwScore =
+        completed.length > 0
+          ? Math.round(
+              completed.reduce(
+                (acc, s) => acc + (s.result?.rw?.score ?? s.score.rwScaled),
+                0
+              ) / completed.length
+            )
+          : 0;
+      const avgMathScore =
+        completed.length > 0
+          ? Math.round(
+              completed.reduce(
+                (acc, s) => acc + (s.result?.math?.score ?? s.score.mathScaled),
+                0
+              ) / completed.length
+            )
+          : 0;
+
+      let ansCount = 0;
+      let corrCount = 0;
+      for (const s of testSessions) {
+        for (const [qId, ans] of Object.entries(s.answers || {})) {
+          if (!ans || !String(ans).trim()) continue;
+          const qObj = qLookup.get(qId);
+          if (!qObj) continue;
+          ansCount += 1;
+          if (isAnswerCorrect(qObj, ans)) {
+            corrCount += 1;
+          }
+        }
+      }
+      const accuracyPercent =
+        ansCount > 0 ? Math.round((corrCount / ansCount) * 100) : 0;
+
+      map.set(pt.id, {
+        test: pt,
+        totalQuestionsCount: testQs.length,
+        rwQuestionsCount: rwQs,
+        mathQuestionsCount: mathQs,
+        totalAttempts: testSessions.length,
+        activeCount,
+        completedCount: completed.length,
+        avgScore,
+        maxScore,
+        avgRwScore,
+        avgMathScore,
+        accuracyPercent,
+      });
+    }
+
+    return map;
+  }, [effectivePracticeTests, questions, sessions]);
+
+  const sessionsForSelectedTestFilter = useMemo(() => {
+    if (resultsPracticeTestFilter === 'all') return sessions;
+    return sessions.filter(
+      (s) => (s.testId || DEFAULT_PRACTICE_TEST_ID) === resultsPracticeTestFilter
+    );
+  }, [sessions, resultsPracticeTestFilter]);
+
+  const filteredSessions = sessionsForSelectedTestFilter.filter((s) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      s.fullName.toLowerCase().includes(q) ||
+      (s.email && s.email.toLowerCase().includes(q)) ||
+      s.password.toLowerCase().includes(q);
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'completed'
+        ? s.status === 'completed'
+        : s.status !== 'completed');
+    return matchesSearch && matchesStatus;
+  });
+
+  const totalStudents = sessionsForSelectedTestFilter.length;
+  const activeStudents = sessionsForSelectedTestFilter.filter(
+    (s) => s.status !== 'completed'
+  ).length;
+  const completedSessions = sessionsForSelectedTestFilter.filter(
     (s) =>
       s.status === 'completed' ||
       (isSectionCompleted(s, 'rw') && isSectionCompleted(s, 'math'))
@@ -489,7 +699,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const inspectedSession = sessions.find((s) => s.id === inspectedSessionId) || null;
 
   const moduleQuestions = useMemo(() => {
-    return questions
+    return activeTestQuestions
       .filter((q) => {
         if (q.moduleId !== selectedModuleFilter) return false;
         if (selectedSubModuleNumber === 2 && selectedVariantFilter !== 'all') {
@@ -502,7 +712,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         (a, b) =>
           (a.variant || '').localeCompare(b.variant || '') || a.number - b.number
       );
-  }, [questions, selectedModuleFilter, selectedSubModuleNumber, selectedVariantFilter]);
+  }, [activeTestQuestions, selectedModuleFilter, selectedSubModuleNumber, selectedVariantFilter]);
 
   const duplicateNumbersInModule = useMemo(() => {
     const seen = new Map<string, string[]>();
@@ -713,10 +923,1185 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setNewQOptB('');
     setNewQOptC('');
     setNewQOptD('');
+    setNewQOptTables({});
+    setOptionTableEditors({});
     setNewQCorrect('A');
     setNewQExplanation('');
+    setNewQImageUrl('');
+    setNewQTableData(undefined);
+    setTablePromptText('');
+    setTableInputMode('prompt');
+    setImagePasteStatus(null);
     setCreateError(null);
     setIsCreatingQuestion(true);
+  };
+
+  // Image file upload with automatic compression for Firestore document size safety
+  const handleQuestionImageUpload = (
+    file: File,
+    onLoaded: (dataUrl: string) => void
+  ) => {
+    if (!file) return;
+    if (file.type === 'image/svg+xml') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          onLoaded(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rawUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!rawUrl) return;
+      const img = new window.Image();
+      img.onload = () => {
+        const maxDim = 920;
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.86);
+          onLoaded(compressed.length < rawUrl.length ? compressed : rawUrl);
+        } else {
+          onLoaded(rawUrl);
+        }
+      };
+      img.onerror = () => {
+        onLoaded(rawUrl);
+      };
+      img.src = rawUrl;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Global Ctrl+V clipboard image paste listener when Edit or Create Question modal is open
+  useEffect(() => {
+    if (!editingQuestion && !isCreatingQuestion) return;
+
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      let imageFile: File | null = null;
+      if (clipboardData.items) {
+        for (let i = 0; i < clipboardData.items.length; i++) {
+          const item = clipboardData.items[i];
+          if (item.type && item.type.startsWith('image/')) {
+            const f = item.getAsFile();
+            if (f) {
+              imageFile = f;
+              break;
+            }
+          }
+        }
+      }
+      if (!imageFile && clipboardData.files && clipboardData.files.length > 0) {
+        for (let i = 0; i < clipboardData.files.length; i++) {
+          const f = clipboardData.files[i];
+          if (f.type && f.type.startsWith('image/')) {
+            imageFile = f;
+            break;
+          }
+        }
+      }
+
+      if (imageFile) {
+        e.preventDefault();
+        handleQuestionImageUpload(imageFile, (dataUrl) => {
+          if (editingQuestion) {
+            setEditingQuestion((prev) =>
+              prev ? { ...prev, imageUrl: dataUrl } : prev
+            );
+          } else if (isCreatingQuestion) {
+            setNewQImageUrl(dataUrl);
+          }
+          setImagePasteStatus('Rasm Ctrl+V orqali muvaffaqiyatli joylandi!');
+          setTimeout(() => {
+            setImagePasteStatus(null);
+          }, 4000);
+        });
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => {
+      window.removeEventListener('paste', handleGlobalPaste);
+    };
+  }, [editingQuestion, isCreatingQuestion]);
+
+  // Reusable Table & Image Editor UI for Edit and Create Question Modals
+  const renderTableAndImageEditor = (params: {
+    tableData: QuestionTableData | undefined;
+    onChangeTableData: (next: QuestionTableData | undefined) => void;
+    imageUrl: string | undefined;
+    onChangeImageUrl: (next: string | undefined) => void;
+    passageText: string;
+    onChangePassageText: (next: string) => void;
+    promptText: string;
+    onChangePromptText: (next: string) => void;
+  }) => {
+    const {
+      tableData,
+      onChangeTableData,
+      imageUrl,
+      onChangeImageUrl,
+      passageText,
+      onChangePassageText,
+      promptText,
+      onChangePromptText,
+    } = params;
+
+    const canExtractFromPassage =
+      passageText.includes('|') || passageText.includes('\t');
+    const canExtractFromPrompt =
+      promptText.includes('|') || promptText.includes('\t');
+
+    const syncTableAndPrompt = (nextTable: QuestionTableData | undefined) => {
+      onChangeTableData(nextTable);
+      setTablePromptText(formatTableDataToPrompt(nextTable));
+    };
+
+    const handleExtractTableFromText = () => {
+      if (canExtractFromPassage) {
+        const res = parseTextToTableData(passageText);
+        if (res.tableData) {
+          syncTableAndPrompt(res.tableData);
+          onChangePassageText(res.remainingText);
+          return;
+        }
+      }
+      if (canExtractFromPrompt) {
+        const res = parseTextToTableData(promptText);
+        if (res.tableData) {
+          syncTableAndPrompt(res.tableData);
+          onChangePromptText(res.remainingText);
+          return;
+        }
+      }
+    };
+
+    const handleTablePromptChange = (rawVal: string) => {
+      setTablePromptText(rawVal);
+      if (!rawVal.trim()) {
+        onChangeTableData(undefined);
+        return;
+      }
+      const parsed = parseTablePromptToData(rawVal);
+      if (parsed) {
+        onChangeTableData(parsed);
+      }
+    };
+
+    const handleApplySamplePrompt = () => {
+      setTablePromptText(SAMPLE_TABLE_PROMPT);
+      const parsed = parseTablePromptToData(SAMPLE_TABLE_PROMPT);
+      if (parsed) {
+        onChangeTableData(parsed);
+      }
+    };
+
+    const handleInitEmptyTable = () => {
+      const initial: QuestionTableData = {
+        title: '',
+        headers: ['Ustun 1', 'Ustun 2'],
+        rows: [
+          ['', ''],
+          ['', ''],
+        ],
+      };
+      syncTableAndPrompt(initial);
+      setTableInputMode('grid');
+    };
+
+    const handleAddColumn = () => {
+      if (!tableData) return;
+      const nextColIdx = tableData.headers.length + 1;
+      syncTableAndPrompt({
+        ...tableData,
+        headers: [...tableData.headers, `Ustun ${nextColIdx}`],
+        rows: tableData.rows.map((r) => [...r, '']),
+      });
+    };
+
+    const handleRemoveColumn = (colIdx: number) => {
+      if (!tableData || tableData.headers.length <= 1) return;
+      syncTableAndPrompt({
+        ...tableData,
+        headers: tableData.headers.filter((_, i) => i !== colIdx),
+        rows: tableData.rows.map((r) => r.filter((_, i) => i !== colIdx)),
+      });
+    };
+
+    const handleAddRow = () => {
+      if (!tableData) return;
+      syncTableAndPrompt({
+        ...tableData,
+        rows: [
+          ...tableData.rows,
+          Array.from({ length: tableData.headers.length }, () => ''),
+        ],
+      });
+    };
+
+    const handleRemoveRow = (rowIdx: number) => {
+      if (!tableData || tableData.rows.length <= 1) return;
+      syncTableAndPrompt({
+        ...tableData,
+        rows: tableData.rows.filter((_, i) => i !== rowIdx),
+      });
+    };
+
+    const handleDirectPasteOnImageZone = (e: React.ClipboardEvent) => {
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+      let imageFile: File | null = null;
+      if (clipboardData.items) {
+        for (let i = 0; i < clipboardData.items.length; i++) {
+          const item = clipboardData.items[i];
+          if (item.type && item.type.startsWith('image/')) {
+            const f = item.getAsFile();
+            if (f) {
+              imageFile = f;
+              break;
+            }
+          }
+        }
+      }
+      if (!imageFile && clipboardData.files && clipboardData.files.length > 0) {
+        for (let i = 0; i < clipboardData.files.length; i++) {
+          const f = clipboardData.files[i];
+          if (f.type && f.type.startsWith('image/')) {
+            imageFile = f;
+            break;
+          }
+        }
+      }
+      if (imageFile) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleQuestionImageUpload(imageFile, (dataUrl) => {
+          onChangeImageUrl(dataUrl);
+          setImagePasteStatus('Rasm Ctrl+V orqali muvaffaqiyatli joylandi!');
+          setTimeout(() => {
+            setImagePasteStatus(null);
+          }, 4000);
+        });
+      }
+    };
+
+    return (
+      <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+        {/* 1. JADVAL (TABLE) BUILDER — PROMPT & GRID MODES */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <TableIcon className="w-4 h-4 text-[#2563eb]" />
+              <span className="font-bold text-slate-900">
+                Jadval (Table — ixtiyoriy)
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="inline-flex rounded-lg bg-slate-200/80 p-0.5 border border-slate-300/80">
+                <button
+                  type="button"
+                  onClick={() => setTableInputMode('prompt')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                    tableInputMode === 'prompt'
+                      ? 'bg-white text-[#2563eb] shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Prompt shaklida kiritish
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!tableData) {
+                      handleInitEmptyTable();
+                    } else {
+                      setTableInputMode('grid');
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors cursor-pointer ${
+                    tableInputMode === 'grid'
+                      ? 'bg-white text-[#2563eb] shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Katakchalar (Vizual)
+                </button>
+              </div>
+
+              {(canExtractFromPassage || canExtractFromPrompt) && (
+                <button
+                  type="button"
+                  onClick={handleExtractTableFromText}
+                  className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Matn yoki Savol sharti ichidagi '|' belgilari bilan ajratilgan qatorlarni avtomatik jadvalga aylantirish"
+                >
+                  <TableIcon className="w-3.5 h-3.5" />
+                  <span>Matndan jadval ajratib olish</span>
+                </button>
+              )}
+
+              {tableData && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeTableData(undefined);
+                    setTablePromptText('');
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 text-red-600 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Jadvalni o‘chirish</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {tableInputMode === 'prompt' ? (
+            <div className="space-y-3">
+              {/* Visible Prompt Example Box */}
+              <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3 space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold text-[#1e40af]">
+                    Jadval Prompt namunasi (har bir ustunni &quot;|&quot; belgisi yoki Tab bilan ajrating):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleApplySamplePrompt}
+                    className="px-2.5 py-1 rounded-md bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-[11px] font-bold cursor-pointer transition-colors"
+                  >
+                    Ushbu namunani qo‘llash
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono text-slate-700 bg-white/90 border border-blue-100 rounded-lg p-2.5 overflow-x-auto leading-relaxed select-all">
+                  {SAMPLE_TABLE_PROMPT}
+                </pre>
+              </div>
+
+              {/* Prompt Input Textarea */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-700">
+                    Jadval Prompt matni (shu yerga jadval qatorlarini yozing yoki Excel/Word dan joylang):
+                  </label>
+                  <span className="text-[11px] text-slate-500">
+                    1-qator: Ustun nomlari | Keyingi qatorlar: Qiymatlar
+                  </span>
+                </div>
+                <textarea
+                  rows={4}
+                  value={tablePromptText}
+                  onChange={(e) => handleTablePromptChange(e.target.value)}
+                  placeholder={`Masalan:\nSarlavha: Bird Species and Mean Body Mass\nSpecies | Mean body mass (g) | Uses broken-wing display?\nCommon snipe | 126 | Yes\nPied-billed grebe | 442 | No`}
+                  className="w-full rounded-lg border border-slate-300 bg-white p-2.5 font-mono text-xs text-slate-900 focus:border-[#2563eb] focus:outline-none"
+                />
+              </div>
+
+              {/* Live Preview of Parsed Table */}
+              {tableData && tableData.headers.length > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-emerald-700 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>
+                        Hosil qilingan jadval ko‘rinishi ({tableData.headers.length} ustun ×{' '}
+                        {tableData.rows.length} qator)
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTableInputMode('grid')}
+                      className="text-[11px] font-bold text-[#2563eb] hover:underline cursor-pointer"
+                    >
+                      Katakchalarda tahrirlash →
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-lg border border-slate-300">
+                    {tableData.title && (
+                      <div className="bg-slate-100 border-b border-slate-300 px-3 py-1.5 text-xs font-bold text-slate-900 text-center sat-serif">
+                        {tableData.title}
+                      </div>
+                    )}
+                    <table className="w-full border-collapse text-left text-xs sat-serif">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-300">
+                          {tableData.headers.map((h, hIdx) => (
+                            <th
+                              key={hIdx}
+                              className="px-3 py-1.5 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                              dangerouslySetInnerHTML={{
+                                __html: renderSATTextWithMath(
+                                  h || `Ustun ${hIdx + 1}`,
+                                  true
+                                ),
+                              }}
+                            />
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {tableData.rows.map((row, rIdx) => (
+                          <tr key={rIdx}>
+                            {tableData.headers.map((_, cIdx) => (
+                              <td
+                                key={cIdx}
+                                className="px-3 py-1.5 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                dangerouslySetInnerHTML={{
+                                  __html: renderSATTextWithMath(
+                                    row[cIdx] || '',
+                                    true
+                                  ),
+                                }}
+                              />
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : !tableData ? (
+            <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-3">
+              <span className="text-[11px] text-slate-500">
+                Vizual jadval yaratish uchun tugmani bosing:
+              </span>
+              <button
+                type="button"
+                onClick={handleInitEmptyTable}
+                className="px-3 py-1.5 rounded-lg bg-[#2563eb] text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Jadval qo‘shish</span>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2.5 bg-white p-3 rounded-xl border border-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="text-[11px] font-semibold text-slate-600">
+                  Jadval sarlavhasi (ixtiyoriy)
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleAddColumn}
+                    className="px-2.5 py-1 rounded-md bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-800 text-[11px] font-semibold cursor-pointer"
+                  >
+                    + Ustun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddRow}
+                    className="px-2.5 py-1 rounded-md bg-slate-100 border border-slate-300 hover:bg-slate-200 text-slate-800 text-[11px] font-semibold cursor-pointer"
+                  >
+                    + Qator
+                  </button>
+                </div>
+              </div>
+
+              <input
+                type="text"
+                value={tableData.title || ''}
+                onChange={(e) =>
+                  syncTableAndPrompt({
+                    ...tableData,
+                    title: e.target.value,
+                  })
+                }
+                placeholder="Masalan: Bird Species and Mean Body Mass (g)"
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-[#2563eb] focus:outline-none"
+              />
+
+              <div className="overflow-x-auto rounded-lg border border-slate-300">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-100 border-b border-slate-300">
+                      {tableData.headers.map((hdr, cIdx) => (
+                        <th
+                          key={cIdx}
+                          className="p-1.5 border-r last:border-r-0 border-slate-300 min-w-[130px]"
+                        >
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={hdr}
+                              onChange={(e) => {
+                                const nextHeaders = [...tableData.headers];
+                                nextHeaders[cIdx] = e.target.value;
+                                syncTableAndPrompt({
+                                  ...tableData,
+                                  headers: nextHeaders,
+                                });
+                              }}
+                              placeholder={`Ustun ${cIdx + 1}`}
+                              className="w-full bg-white rounded border border-slate-300 px-2 py-1 font-bold text-slate-900 focus:border-[#2563eb] focus:outline-none"
+                            />
+                            {tableData.headers.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveColumn(cIdx)}
+                                className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0 cursor-pointer"
+                                title="Ustunni o‘chirish"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </th>
+                      ))}
+                      <th className="w-9 bg-slate-100" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {tableData.rows.map((row, rIdx) => (
+                      <tr key={rIdx} className="hover:bg-slate-50/60">
+                        {tableData.headers.map((_, cIdx) => (
+                          <td
+                            key={cIdx}
+                            className="p-1.5 border-r last:border-r-0 border-slate-200"
+                          >
+                            <input
+                              type="text"
+                              value={row[cIdx] ?? ''}
+                              onChange={(e) => {
+                                const nextRows = tableData.rows.map((r, i) => {
+                                  if (i !== rIdx) return r;
+                                  const copy = [...r];
+                                  copy[cIdx] = e.target.value;
+                                  return copy;
+                                });
+                                syncTableAndPrompt({
+                                  ...tableData,
+                                  rows: nextRows,
+                                });
+                              }}
+                              placeholder="Qiymat..."
+                              className="w-full bg-white rounded border border-slate-200 px-2 py-1 text-slate-800 focus:border-[#2563eb] focus:outline-none"
+                            />
+                          </td>
+                        ))}
+                        <td className="p-1 text-center">
+                          {tableData.rows.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveRow(rIdx)}
+                              className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
+                              title="Qatorni o‘chirish"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <hr className="border-slate-200" />
+
+        {/* 2. RASM (IMAGE / GRAPH / DIAGRAM) UPLOADER WITH CTRL+V PASTE */}
+        <div
+          onPaste={handleDirectPasteOnImageZone}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const f = e.dataTransfer?.files?.[0];
+            if (f && f.type.startsWith('image/')) {
+              handleQuestionImageUpload(f, (dataUrl) => {
+                onChangeImageUrl(dataUrl);
+                setImagePasteStatus('Rasm muvaffaqiyatli yuklandi!');
+                setTimeout(() => setImagePasteStatus(null), 4000);
+              });
+            }
+          }}
+          className="space-y-2.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ImageIcon className="w-4 h-4 text-[#2563eb]" />
+              <span className="font-bold text-slate-900">
+                Rasm / Grafik / Diagramma (ixtiyoriy)
+              </span>
+              <span className="px-2 py-0.5 rounded bg-blue-100 text-[#1e40af] font-mono text-[10px] font-bold">
+                Ctrl + V ishlaydi
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-[#2563eb] border border-blue-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Kompyuterdan rasm yuklash</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      handleQuestionImageUpload(f, (dataUrl) => {
+                        onChangeImageUrl(dataUrl);
+                      });
+                    }
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              {imageUrl && (
+                <button
+                  type="button"
+                  onClick={() => onChangeImageUrl(undefined)}
+                  className="px-2.5 py-1.5 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 text-red-600 text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Rasmni o‘chirish</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {imagePasteStatus && (
+            <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{imagePasteStatus}</span>
+            </div>
+          )}
+
+          {/* Dedicated Ctrl+V Paste & Drag-Drop Box */}
+          <div
+            tabIndex={0}
+            onPaste={handleDirectPasteOnImageZone}
+            className="rounded-xl border-2 border-dashed border-blue-300 bg-white/90 hover:bg-blue-50/40 focus:border-[#2563eb] focus:bg-blue-50/50 focus:outline-none p-3 text-center transition-colors cursor-pointer"
+          >
+            <div className="text-xs font-bold text-slate-800">
+              Nusxalangan rasmni yoki skrinshotni joylash uchun{' '}
+              <kbd className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono text-[11px] text-[#2563eb]">
+                Ctrl + V
+              </kbd>{' '}
+              tugmasini bosing
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Shuningdek, rasm faylini sichqoncha bilan shu yerga tortib tashlashingiz (Drag &amp; Drop) yoki quyiga URL yozishingiz mumkin.
+            </p>
+          </div>
+
+          <div>
+            <input
+              type="text"
+              value={imageUrl || ''}
+              onChange={(e) =>
+                onChangeImageUrl(e.target.value.trim() ? e.target.value : undefined)
+              }
+              placeholder="Yoki rasm URL manzilini kiriting (https://... yoki /assets/...)"
+              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-[#2563eb] focus:outline-none"
+            />
+          </div>
+
+          {imageUrl && (
+            <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col items-center gap-2">
+              <img
+                src={imageUrl}
+                alt="Savol rasmi oldindan ko‘rinishi"
+                className="max-h-52 w-auto max-w-full object-contain rounded border border-slate-100"
+              />
+              <span className="text-[11px] text-slate-500">
+                Rasm imtihon oynasida savol ustida ko‘rsatiladi
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const initOptionTableEditorsFromQuestion = (q: SATQuestion) => {
+    const nextEditors: Partial<
+      Record<
+        'A' | 'B' | 'C' | 'D',
+        { open: boolean; mode: 'prompt' | 'grid'; promptText: string }
+      >
+    > = {};
+    if (q.options) {
+      for (const opt of q.options) {
+        if (opt.tableData && opt.tableData.headers.length > 0) {
+          nextEditors[opt.id] = {
+            open: true,
+            mode: 'prompt',
+            promptText: formatTableDataToPrompt(opt.tableData),
+          };
+        }
+      }
+    }
+    setOptionTableEditors(nextEditors);
+  };
+
+  // Reusable Per-Option Table Editor (Variant A, B, C, D)
+  const renderOptionTableEditor = (params: {
+    optId: 'A' | 'B' | 'C' | 'D';
+    optText: string;
+    onChangeOptText: (nextText: string) => void;
+    tableData: QuestionTableData | undefined;
+    onChangeTableData: (nextTable: QuestionTableData | undefined) => void;
+  }) => {
+    const { optId, optText, onChangeOptText, tableData, onChangeTableData } = params;
+    const editorState = optionTableEditors[optId] || {
+      open: Boolean(tableData && tableData.headers.length > 0),
+      mode: 'prompt' as const,
+      promptText: formatTableDataToPrompt(tableData),
+    };
+
+    const setEditorForOpt = (
+      patch: Partial<{ open: boolean; mode: 'prompt' | 'grid'; promptText: string }>
+    ) => {
+      setOptionTableEditors((prev) => ({
+        ...prev,
+        [optId]: {
+          open: prev[optId]?.open ?? Boolean(tableData && tableData.headers.length > 0),
+          mode: prev[optId]?.mode ?? 'prompt',
+          promptText: prev[optId]?.promptText ?? formatTableDataToPrompt(tableData),
+          ...patch,
+        },
+      }));
+    };
+
+    const syncOptTableAndPrompt = (nextTable: QuestionTableData | undefined) => {
+      onChangeTableData(nextTable);
+      setEditorForOpt({
+        open: Boolean(nextTable),
+        promptText: formatTableDataToPrompt(nextTable),
+      });
+    };
+
+    const handleOptPromptChange = (rawVal: string) => {
+      setEditorForOpt({ open: true, promptText: rawVal });
+      if (!rawVal.trim()) {
+        onChangeTableData(undefined);
+        return;
+      }
+      const parsed = parseTablePromptToData(rawVal);
+      if (parsed) {
+        onChangeTableData(parsed);
+      }
+    };
+
+    const handleApplyOptSample = () => {
+      const sample = SAMPLE_OPTION_TABLE_PROMPT;
+      const parsed = parseTablePromptToData(sample);
+      onChangeTableData(parsed);
+      setEditorForOpt({
+        open: true,
+        mode: 'prompt',
+        promptText: sample,
+      });
+    };
+
+    const handleInitOptGrid = () => {
+      const initial: QuestionTableData = tableData || {
+        title: '',
+        headers: ['x', 'y'],
+        rows: [
+          ['1', '5'],
+          ['2', '9'],
+          ['3', '13'],
+        ],
+      };
+      onChangeTableData(initial);
+      setEditorForOpt({
+        open: true,
+        mode: 'grid',
+        promptText: formatTableDataToPrompt(initial),
+      });
+    };
+
+    const canExtractFromOptText =
+      (optText.includes('|') || optText.includes('\t')) && optText.includes('\n');
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <label className="font-bold text-slate-800 flex items-center gap-1.5">
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-slate-900 text-white text-[11px] font-bold">
+              {optId}
+            </span>
+            <span>Variant {optId}</span>
+            <span className="text-[10px] font-normal text-slate-500">
+              (Matn / LaTeX yoki Jadval)
+            </span>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-1">
+            {canExtractFromOptText && (
+              <button
+                type="button"
+                onClick={() => {
+                  const res = parseTextToTableData(optText);
+                  if (res.tableData) {
+                    syncOptTableAndPrompt(res.tableData);
+                    onChangeOptText(res.remainingText);
+                  }
+                }}
+                className="px-2 py-1 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-950 border border-amber-300 text-[10px] font-bold cursor-pointer"
+              >
+                Matndan jadval ajratish
+              </button>
+            )}
+
+            {!editorState.open && !tableData ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditorForOpt({
+                    open: true,
+                    mode: 'prompt',
+                    promptText: formatTableDataToPrompt(tableData),
+                  });
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white hover:bg-blue-50 text-[#2563eb] border border-blue-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <TableIcon className="w-3 h-3" />
+                <span>+ Jadval qo‘shish</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setEditorForOpt({ open: !editorState.open })}
+                  className="px-2 py-1 rounded-md bg-blue-50 border border-blue-200 text-[#2563eb] text-[10px] font-bold cursor-pointer"
+                >
+                  {editorState.open ? 'Jadvalni yig‘ish' : 'Jadvalni tahrirlash'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangeTableData(undefined);
+                    setEditorForOpt({ open: false, promptText: '' });
+                  }}
+                  className="px-2 py-1 rounded-md bg-red-50 border border-red-200 hover:bg-red-100 text-red-600 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>O‘chirish</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <input
+          type="text"
+          value={optText}
+          onChange={(e) => onChangeOptText(e.target.value)}
+          placeholder={
+            tableData
+              ? `Variant ${optId} izohi (ixtiyoriy, jadval biriktirilgan)...`
+              : `Variant ${optId} matni yoki matematik ifoda (masalan: 2x^2 + 5x - 3)...`
+          }
+          className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs focus:border-[#2563eb] focus:outline-none"
+        />
+
+        {/* Live Math Preview for Option Text */}
+        {optText.trim() && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200/80 text-xs text-slate-800 flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-slate-400 shrink-0">
+              Ko‘rinishi:
+            </span>
+            <div
+              className="sat-serif overflow-x-auto"
+              dangerouslySetInnerHTML={{
+                __html: renderSATTextWithMath(optText, true),
+              }}
+            />
+          </div>
+        )}
+
+        {/* Per-Option Table Editor Panel */}
+        {editorState.open && (
+          <div className="rounded-xl border border-blue-200 bg-white p-3 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1.5">
+                <TableIcon className="w-3.5 h-3.5 text-[#2563eb]" />
+                <span>Variant {optId} jadvali</span>
+              </span>
+
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEditorForOpt({ mode: 'prompt' })}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    editorState.mode === 'prompt'
+                      ? 'bg-white text-[#2563eb] shadow-2xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Prompt orqali
+                </button>
+                <button
+                  type="button"
+                  onClick={handleInitOptGrid}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    editorState.mode === 'grid'
+                      ? 'bg-white text-[#2563eb] shadow-2xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Katakchalar
+                </button>
+              </div>
+            </div>
+
+            {editorState.mode === 'prompt' ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1 bg-blue-50/70 border border-blue-100 rounded-lg px-2.5 py-1.5">
+                  <span className="text-[10px] text-[#1e40af] font-medium">
+                    Namuna: <code className="font-mono font-bold">x | y</code> va keyingi qatorlarda qiymatlar
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleApplyOptSample}
+                    className="px-2 py-0.5 rounded bg-[#2563eb] text-white text-[10px] font-bold cursor-pointer"
+                  >
+                    Namunani qo‘llash
+                  </button>
+                </div>
+
+                <textarea
+                  rows={4}
+                  value={editorState.promptText}
+                  onChange={(e) => handleOptPromptChange(e.target.value)}
+                  placeholder={`x | y\n3 | 14\n5 | 22\n7 | 30`}
+                  className="w-full rounded-lg border border-slate-300 p-2 font-mono text-xs focus:border-[#2563eb] focus:outline-none"
+                />
+              </div>
+            ) : (
+              tableData && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <input
+                      type="text"
+                      value={tableData.title || ''}
+                      onChange={(e) =>
+                        syncOptTableAndPrompt({
+                          ...tableData,
+                          title: e.target.value,
+                        })
+                      }
+                      placeholder="Jadval sarlavhasi (ixtiyoriy)"
+                      className="flex-1 rounded border border-slate-300 px-2 py-1 text-xs"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextCol = tableData.headers.length + 1;
+                          syncOptTableAndPrompt({
+                            ...tableData,
+                            headers: [...tableData.headers, `Ustun ${nextCol}`],
+                            rows: tableData.rows.map((r) => [...r, '']),
+                          });
+                        }}
+                        className="px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        + Ustun
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          syncOptTableAndPrompt({
+                            ...tableData,
+                            rows: [
+                              ...tableData.rows,
+                              Array.from({ length: tableData.headers.length }, () => ''),
+                            ],
+                          });
+                        }}
+                        className="px-2 py-1 rounded bg-slate-100 border border-slate-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        + Qator
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-lg border border-slate-300">
+                    <table className="w-full border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 border-b border-slate-300">
+                          {tableData.headers.map((hdr, cIdx) => (
+                            <th
+                              key={cIdx}
+                              className="p-1 border-r last:border-r-0 border-slate-300"
+                            >
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={hdr}
+                                  onChange={(e) => {
+                                    const nextH = [...tableData.headers];
+                                    nextH[cIdx] = e.target.value;
+                                    syncOptTableAndPrompt({
+                                      ...tableData,
+                                      headers: nextH,
+                                    });
+                                  }}
+                                  className="w-full bg-white rounded border border-slate-300 px-1.5 py-0.5 font-bold text-center"
+                                />
+                                {tableData.headers.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      syncOptTableAndPrompt({
+                                        ...tableData,
+                                        headers: tableData.headers.filter(
+                                          (_, i) => i !== cIdx
+                                        ),
+                                        rows: tableData.rows.map((r) =>
+                                          r.filter((_, i) => i !== cIdx)
+                                        ),
+                                      });
+                                    }}
+                                    className="text-slate-400 hover:text-red-600 cursor-pointer"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </th>
+                          ))}
+                          <th className="w-6 bg-slate-100" />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {tableData.rows.map((row, rIdx) => (
+                          <tr key={rIdx}>
+                            {tableData.headers.map((_, cIdx) => (
+                              <td
+                                key={cIdx}
+                                className="p-1 border-r last:border-r-0 border-slate-200"
+                              >
+                                <input
+                                  type="text"
+                                  value={row[cIdx] ?? ''}
+                                  onChange={(e) => {
+                                    const nextRows = tableData.rows.map((r, i) => {
+                                      if (i !== rIdx) return r;
+                                      const copy = [...r];
+                                      copy[cIdx] = e.target.value;
+                                      return copy;
+                                    });
+                                    syncOptTableAndPrompt({
+                                      ...tableData,
+                                      rows: nextRows,
+                                    });
+                                  }}
+                                  className="w-full bg-white rounded border border-slate-200 px-1.5 py-0.5 text-center"
+                                />
+                              </td>
+                            ))}
+                            <td className="p-1 text-center">
+                              {tableData.rows.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    syncOptTableAndPrompt({
+                                      ...tableData,
+                                      rows: tableData.rows.filter((_, i) => i !== rIdx),
+                                    });
+                                  }}
+                                  className="text-slate-400 hover:text-red-600 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            )}
+
+            {/* Live Preview of Option Table */}
+            {tableData && tableData.headers.length > 0 && (
+              <div className="pt-1">
+                <div className="text-[10px] font-bold text-emerald-700 mb-1 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>Variant {optId} jadvali ko‘rinishi:</span>
+                </div>
+                <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white max-w-xs">
+                  {tableData.title && (
+                    <div className="bg-slate-100 border-b border-slate-300 px-2.5 py-1 text-[11px] font-bold text-slate-900 text-center sat-serif">
+                      {tableData.title}
+                    </div>
+                  )}
+                  <table className="w-full border-collapse text-center text-xs sat-serif">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-300">
+                        {tableData.headers.map((h, hIdx) => (
+                          <th
+                            key={hIdx}
+                            className="px-2.5 py-1 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                            dangerouslySetInnerHTML={{
+                              __html: renderSATTextWithMath(
+                                h || `Ustun ${hIdx + 1}`,
+                                true
+                              ),
+                            }}
+                          />
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {tableData.rows.map((row, rIdx) => (
+                        <tr key={rIdx}>
+                          {tableData.headers.map((_, cIdx) => (
+                            <td
+                              key={cIdx}
+                              className="px-2.5 py-1 text-slate-800 border-r last:border-r-0 border-slate-200"
+                              dangerouslySetInnerHTML={{
+                                __html: renderSATTextWithMath(row[cIdx] || '', true),
+                              }}
+                            />
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const handleNewModuleChange = (modId: ModuleId) => {
@@ -750,14 +2135,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       skill: newQSkill || undefined,
       difficulty: newQDifficulty ? (newQDifficulty as QuestionDifficulty) : undefined,
       passage: newQPassage,
+      imageUrl: newQImageUrl || undefined,
+      tableData: newQTableData,
       prompt: newQPrompt,
       options:
         effectiveType === 'mcq'
           ? [
-              { id: 'A' as const, text: newQOptA },
-              { id: 'B' as const, text: newQOptB },
-              { id: 'C' as const, text: newQOptC },
-              { id: 'D' as const, text: newQOptD },
+              { id: 'A' as const, text: newQOptA, tableData: newQOptTables.A },
+              { id: 'B' as const, text: newQOptB, tableData: newQOptTables.B },
+              { id: 'C' as const, text: newQOptC, tableData: newQOptTables.C },
+              { id: 'D' as const, text: newQOptD, tableData: newQOptTables.D },
             ]
           : undefined,
       correctAnswer: newQCorrect,
@@ -773,6 +2160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSavingQuestion(true);
     try {
       await onAddQuestion({
+        testId: selectedPracticeTestId,
         moduleId: candidate.moduleId!,
         variant: candidate.variant,
         scored: candidate.scored !== false,
@@ -781,6 +2169,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         skill: candidate.skill,
         difficulty: candidate.difficulty,
         passage: candidate.passage,
+        imageUrl: candidate.imageUrl,
+        tableData: candidate.tableData,
         prompt: candidate.prompt!,
         options: candidate.options,
         correctAnswer: candidate.correctAnswer!,
@@ -791,6 +2181,138 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setCreateError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSavingQuestion(false);
+    }
+  };
+
+  const openCreatePracticeTestModal = () => {
+    const nextNum = effectivePracticeTests.length + 1;
+    setEditingPracticeTest(null);
+    setPtTitle(`Full-Length Practice Test #${nextNum}`);
+    setPtDescription(
+      'Official Bluebook formatidagi to‘liq 4 modulli adaptiv imtihon (Reading & Writing + Math).'
+    );
+    setPtStatus('active');
+    setPtRwMinutes(32);
+    setPtMathMinutes(35);
+    setPtCloneFromId('');
+    setPracticeTestModalError(null);
+    setIsPracticeTestModalOpen(true);
+  };
+
+  const openEditPracticeTestModal = (pt: PracticeTest) => {
+    setEditingPracticeTest(pt);
+    setPtTitle(pt.title);
+    setPtDescription(pt.description);
+    setPtStatus(pt.status);
+    setPtRwMinutes(pt.rwDurationMinutes || 32);
+    setPtMathMinutes(pt.mathDurationMinutes || 35);
+    setPtCloneFromId('');
+    setPracticeTestModalError(null);
+    setIsPracticeTestModalOpen(true);
+  };
+
+  const handleSavePracticeTestForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onSavePracticeTest) return;
+    const cleanTitle = ptTitle.trim();
+    if (!cleanTitle) {
+      setPracticeTestModalError('Practice Test nomini kiriting.');
+      return;
+    }
+
+    setIsSavingPracticeTest(true);
+    setPracticeTestModalError(null);
+    try {
+      const nowIso = new Date().toISOString();
+      const testObj: PracticeTest = editingPracticeTest
+        ? {
+            ...editingPracticeTest,
+            title: cleanTitle,
+            description: ptDescription.trim(),
+            status: ptStatus,
+            rwDurationMinutes: Math.max(5, Math.min(120, Number(ptRwMinutes) || 32)),
+            mathDurationMinutes: Math.max(5, Math.min(120, Number(ptMathMinutes) || 35)),
+            updatedAt: nowIso,
+          }
+        : {
+            id: `practice_test_${Date.now().toString(36)}`,
+            title: cleanTitle,
+            description:
+              ptDescription.trim() ||
+              'Official Bluebook formatidagi to‘liq 4 modulli adaptiv imtihon.',
+            status: ptStatus,
+            rwDurationMinutes: Math.max(5, Math.min(120, Number(ptRwMinutes) || 32)),
+            mathDurationMinutes: Math.max(5, Math.min(120, Number(ptMathMinutes) || 35)),
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+
+      await onSavePracticeTest(
+        testObj,
+        !editingPracticeTest && ptCloneFromId ? ptCloneFromId : undefined
+      );
+      setSelectedPracticeTestId(testObj.id);
+      setIsPracticeTestModalOpen(false);
+    } catch (err) {
+      setPracticeTestModalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSavingPracticeTest(false);
+    }
+  };
+
+  const handleChangePracticeTestStatus = async (
+    pt: PracticeTest,
+    nextStatus: 'active' | 'draft'
+  ) => {
+    if (!onSavePracticeTest || pt.status === nextStatus) return;
+    setUpdatingStatusTestId(pt.id);
+    try {
+      const nowIso = new Date().toISOString();
+      await onSavePracticeTest({
+        ...pt,
+        status: nextStatus,
+        updatedAt: nowIso,
+      });
+    } finally {
+      setUpdatingStatusTestId(null);
+    }
+  };
+
+  const handleBulkChangePracticeTestsStatus = async (
+    nextStatus: 'active' | 'draft'
+  ) => {
+    if (!onSavePracticeTest) return;
+    const targets = effectivePracticeTests.filter((t) => t.status !== nextStatus);
+    if (targets.length === 0) return;
+    setUpdatingStatusTestId('bulk');
+    try {
+      const nowIso = new Date().toISOString();
+      for (const pt of targets) {
+        await onSavePracticeTest({
+          ...pt,
+          status: nextStatus,
+          updatedAt: nowIso,
+        });
+      }
+    } finally {
+      setUpdatingStatusTestId(null);
+    }
+  };
+
+  const handleConfirmDeletePracticeTest = async (testId: string) => {
+    if (!onDeletePracticeTest || testId === DEFAULT_PRACTICE_TEST_ID) return;
+    setDeletingTestId(testId);
+    try {
+      await onDeletePracticeTest(testId);
+      if (selectedPracticeTestId === testId) {
+        setSelectedPracticeTestId(DEFAULT_PRACTICE_TEST_ID);
+      }
+      if (resultsPracticeTestFilter === testId) {
+        setResultsPracticeTestFilter('all');
+      }
+      setConfirmDeleteTestId(null);
+    } finally {
+      setDeletingTestId(null);
     }
   };
 
@@ -826,7 +2348,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSavingQuestion(true);
     try {
-      await onUpdateQuestion(candidate as SATQuestion);
+      await onUpdateQuestion({
+        ...(candidate as SATQuestion),
+        testId: editingQuestion.testId || selectedPracticeTestId,
+      });
       setEditingQuestion(null);
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
@@ -845,6 +2370,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const getDefaultPlacementForSelectedModule = (): ImportPlacementTarget => {
+    if (
+      selectedSubModuleNumber === 2 &&
+      (selectedVariantFilter === 'easy' || selectedVariantFilter === 'hard')
+    ) {
+      return `${selectedModuleFilter}_${selectedVariantFilter}` as ImportPlacementTarget;
+    }
+    return selectedModuleFilter;
+  };
+
   const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -855,7 +2390,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setImportCheckResult(
         parseQuestionImport(content, {
           targetPlacement: importPlacement,
-          autoBalanceModules: true,
+          autoBalanceModules:
+            importPlacement === 'rw_auto' || importPlacement === 'math_auto',
           fallbackSection: selectedSection,
         })
       );
@@ -869,7 +2405,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setImportCheckResult(
       parseQuestionImport(importJsonText, {
         targetPlacement: importPlacement,
-        autoBalanceModules: true,
+        autoBalanceModules:
+          importPlacement === 'rw_auto' || importPlacement === 'math_auto',
         fallbackSection: selectedSection,
       })
     );
@@ -878,7 +2415,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleExecuteImport = async () => {
     const res = parseQuestionImport(importJsonText, {
       targetPlacement: importPlacement,
-      autoBalanceModules: true,
+      autoBalanceModules:
+        importPlacement === 'rw_auto' || importPlacement === 'math_auto',
       fallbackSection: selectedSection,
     });
     setImportCheckResult(res);
@@ -887,7 +2425,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsImporting(true);
     setImportActionError(null);
     try {
-      await onImportQuestions(res.items, importMode);
+      await onImportQuestions(res.items, importMode, selectedPracticeTestId);
       setIsImportModalOpen(false);
       setImportJsonText('');
       setImportCheckResult(null);
@@ -907,7 +2445,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!onRedistributeSectionQuestions) return;
     setIsRedistributing(true);
     try {
-      await onRedistributeSectionQuestions(sec);
+      await onRedistributeSectionQuestions(sec, selectedPracticeTestId);
+    } finally {
+      setIsRedistributing(false);
+    }
+  };
+
+  const handleTriggerConsolidateToModule = async (
+    sec: 'rw' | 'math',
+    targetMod: ModuleId,
+    targetVar?: QuestionVariant
+  ) => {
+    if (!onConsolidateSectionToModule) return;
+    setIsRedistributing(true);
+    try {
+      await onConsolidateSectionToModule(
+        sec,
+        targetMod,
+        targetVar,
+        selectedPracticeTestId
+      );
+      setHasManuallySelectedSection(true);
+      setSelectedModuleFilter(targetMod);
     } finally {
       setIsRedistributing(false);
     }
@@ -2119,25 +3678,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
-                  Practice Tests & O‘quvchilar Boshqaruvi ({sessions.length})
+                  Practice Tests & O‘quvchilar Boshqaruvi ({effectivePracticeTests.length} ta test ·{' '}
+                  {sessions.length} o‘quvchi)
                 </h1>
                 <p className="text-xs text-slate-500 mt-1">
-                  Barcha ro‘yxatdan o‘tgan o‘quvchilarning real vaqtdagi natijalari, javoblar varaqasi va akkaunt boshqaruvi.
+                  Yangi Practice Test qo‘shish, har bir testning alohida statistikasini kuzatish, savollarini tahrirlash va o‘quvchilar natijalarini boshqarish.
                 </p>
               </div>
-              {onCreateStudentAccount && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNewStudentFeedback(null);
-                    setIsAddingStudent(!isAddingStudent);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>{isAddingStudent ? 'Formani yopish' : '+ Yangi O‘quvchi Akkaunti'}</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2.5">
+                {onSavePracticeTest && (
+                  <button
+                    type="button"
+                    onClick={openCreatePracticeTestModal}
+                    className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Yangi Practice Test Qo‘shish</span>
+                  </button>
+                )}
+                {onCreateStudentAccount && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewStudentFeedback(null);
+                      setIsAddingStudent(!isAddingStudent);
+                    }}
+                    className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <UserPlus className="w-3.5 h-3.5 text-[#2563eb]" />
+                    <span>
+                      {isAddingStudent ? 'Formani yopish' : '+ Yangi O‘quvchi Akkaunti'}
+                    </span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {isAddingStudent && onCreateStudentAccount && (
@@ -2196,14 +3770,407 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </form>
             )}
 
-            {/* 4 KPI Strip */}
+            {/* Practice Tests List with Per-Test Statistics & Status / Edit Controls */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-[#2563eb]" />
+                    <span>
+                      Mavjud Practice Testlar ({effectivePracticeTests.length} ta) — Holatni Boshqarish, Statistika va Tahrirlash
+                    </span>
+                  </h2>
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold">
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      Faol (Ochiq):{' '}
+                      {effectivePracticeTests.filter((t) => t.status === 'active').length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
+                      Nofaol / Yopiq:{' '}
+                      {effectivePracticeTests.filter((t) => t.status !== 'active').length}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {onSavePracticeTest && effectivePracticeTests.length > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      {effectivePracticeTests.some((t) => t.status !== 'active') && (
+                        <button
+                          type="button"
+                          disabled={updatingStatusTestId !== null}
+                          onClick={() => handleBulkChangePracticeTestsStatus('active')}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          Barchasini faollashtirish
+                        </button>
+                      )}
+                      {effectivePracticeTests.some((t) => t.status === 'active') && (
+                        <button
+                          type="button"
+                          disabled={updatingStatusTestId !== null}
+                          onClick={() => handleBulkChangePracticeTestsStatus('draft')}
+                          className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          Barchasini yopish (Nofaol)
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {resultsPracticeTestFilter !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setResultsPracticeTestFilter('all')}
+                      className="text-xs font-bold text-[#2563eb] hover:underline cursor-pointer"
+                    >
+                      Barcha testlar statistikasini ko‘rsatish
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {effectivePracticeTests.map((pt) => {
+                  const st = practiceTestStatsMap.get(pt.id);
+                  const isSelectedFilter = resultsPracticeTestFilter === pt.id;
+                  const isConfirmingDelete = confirmDeleteTestId === pt.id;
+                  const isUpdatingThisStatus =
+                    updatingStatusTestId === pt.id || updatingStatusTestId === 'bulk';
+                  const isActive = pt.status === 'active';
+
+                  return (
+                    <div
+                      key={pt.id}
+                      className={`bg-white rounded-2xl border p-5 space-y-4 transition-all ${
+                        isSelectedFilter
+                          ? 'border-[#2563eb] ring-2 ring-[#2563eb]/15 shadow-sm'
+                          : isActive
+                          ? 'border-slate-200 hover:border-slate-300'
+                          : 'border-amber-200/90 bg-amber-50/10 hover:border-amber-300'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-2 flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-base font-bold text-slate-900">
+                              {pt.title}
+                            </h3>
+                            {isSelectedFilter && (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 text-[#2563eb] border border-blue-200">
+                                Tanlangan
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Direct Test Status Management Bar (Circled Section) */}
+                          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50/90 px-3 py-2">
+                            <span
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-extrabold uppercase tracking-wide ${
+                                isActive
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-amber-100 text-amber-900 border border-amber-300'
+                              }`}
+                            >
+                              <span
+                                className={`w-2 h-2 rounded-full ${
+                                  isActive ? 'bg-emerald-600' : 'bg-amber-600'
+                                }`}
+                              />
+                              <span>
+                                {isActive
+                                  ? 'FAOL (ACTIVE — OCHIQ)'
+                                  : 'NOFAOL / YOPIQ (DRAFT)'}
+                              </span>
+                            </span>
+
+                            {onSavePracticeTest && (
+                              <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-slate-200 shadow-2xs">
+                                <span className="text-[10px] font-bold text-slate-500 px-1.5">
+                                  Holat:
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={isUpdatingThisStatus || isActive}
+                                  onClick={() =>
+                                    handleChangePracticeTestStatus(pt, 'active')
+                                  }
+                                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                                    isActive
+                                      ? 'bg-emerald-600 text-white shadow-2xs cursor-default'
+                                      : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                                  }`}
+                                  title="Testni o‘quvchilar uchun ochish (Faol)"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Faol (Ochiq)</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isUpdatingThisStatus || !isActive}
+                                  onClick={() =>
+                                    handleChangePracticeTestStatus(pt, 'draft')
+                                  }
+                                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                                    !isActive
+                                      ? 'bg-amber-600 text-white shadow-2xs cursor-default'
+                                      : 'text-slate-600 hover:bg-amber-50 hover:text-amber-800'
+                                  }`}
+                                  title="Testni o‘quvchilar uchun yopish / vaqtincha to‘xtatish (Qoralama)"
+                                >
+                                  <XCircle className="w-3 h-3" />
+                                  <span>Nofaol (Yopiq)</span>
+                                </button>
+                              </div>
+                            )}
+
+                            <span className="text-[11px] text-slate-500">
+                              {isUpdatingThisStatus
+                                ? 'Holat yangilanmoqda...'
+                                : isActive
+                                ? 'O‘quvchilarga ko‘rinadi va ishlash uchun ochiq'
+                                : 'O‘quvchilar uchun yopiq (faqat adminga ko‘rinadi)'}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-500">{pt.description}</p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 shrink-0 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200">
+                          <Clock className="w-3.5 h-3.5 text-[#2563eb]" />
+                          <span>
+                            R&W: {pt.rwDurationMinutes || 32}m · Math:{' '}
+                            {pt.mathDurationMinutes || 35}m
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Per-Test Dedicated Statistics Strip */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50/80 p-3 rounded-xl border border-slate-200/80 text-xs">
+                        <div>
+                          <div className="text-[11px] text-slate-500">Savollar Bazasi</div>
+                          <div className="text-sm font-extrabold text-slate-900 tabular-nums mt-0.5">
+                            {st?.totalQuestionsCount ?? 0} ta
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            R&W: {st?.rwQuestionsCount ?? 0} · Math:{' '}
+                            {st?.mathQuestionsCount ?? 0}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-[11px] text-slate-500">O‘quvchilar</div>
+                          <div className="text-sm font-extrabold text-[#2563eb] tabular-nums mt-0.5">
+                            {st?.totalAttempts ?? 0} ta
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Faol: {st?.activeCount ?? 0} · Yakun:{' '}
+                            {st?.completedCount ?? 0}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-[11px] text-slate-500">
+                            O‘rtacha / Maks Ball
+                          </div>
+                          <div className="text-sm font-extrabold text-slate-900 tabular-nums mt-0.5">
+                            {st && st.completedCount > 0
+                              ? `${st.avgScore} / ${st.maxScore}`
+                              : '—'}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            R&W: {st && st.completedCount > 0 ? st.avgRwScore : '—'} ·
+                            Math: {st && st.completedCount > 0 ? st.avgMathScore : '—'}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-[11px] text-slate-500">
+                            O‘rtacha Aniqlik
+                          </div>
+                          <div className="text-sm font-extrabold text-emerald-700 tabular-nums mt-0.5">
+                            {st?.accuracyPercent ?? 0}%
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            To‘g‘ri javoblar ulushi
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Practice Test Actions: Filter Stats, Edit Questions, Quick Status Toggle, Edit Settings, Delete */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setResultsPracticeTestFilter(
+                                isSelectedFilter ? 'all' : pt.id
+                              )
+                            }
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                              isSelectedFilter
+                                ? 'bg-[#2563eb] text-white'
+                                : 'bg-slate-100 text-slate-800 hover:bg-slate-200/80'
+                            }`}
+                          >
+                            <BarChart2 className="w-3.5 h-3.5" />
+                            <span>
+                              {isSelectedFilter
+                                ? 'Barcha testlarni ko‘rish'
+                                : `Statistika va Natijalar (${st?.totalAttempts ?? 0})`}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPracticeTestId(pt.id);
+                              setActiveTab('questions');
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100/80 text-[#2563eb] text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                            <span>
+                              Savollarni Tahrirlash ({st?.totalQuestionsCount ?? 0})
+                            </span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {onSavePracticeTest && (
+                            <button
+                              type="button"
+                              disabled={isUpdatingThisStatus}
+                              onClick={() =>
+                                handleChangePracticeTestStatus(
+                                  pt,
+                                  isActive ? 'draft' : 'active'
+                                )
+                              }
+                              className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50 ${
+                                isActive
+                                  ? 'border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900'
+                                  : 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800'
+                              }`}
+                              title={
+                                isActive
+                                  ? 'Testni vaqtincha to‘xtatish (yopish)'
+                                  : 'Testni o‘quvchilar uchun faollashtirish (ochish)'
+                              }
+                            >
+                              {isActive ? (
+                                <>
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  <span>Testni yopish</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>Faollashtirish</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+
+                          {onSavePracticeTest && (
+                            <button
+                              type="button"
+                              onClick={() => openEditPracticeTestModal(pt)}
+                              className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                              title="Practice Test nomi, vaqti va holatini tahrirlash"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Tahrirlash</span>
+                            </button>
+                          )}
+
+                          {onDeletePracticeTest && pt.id !== DEFAULT_PRACTICE_TEST_ID && (
+                            <>
+                              {isConfirmingDelete ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    disabled={deletingTestId === pt.id}
+                                    onClick={() => handleConfirmDeletePracticeTest(pt.id)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 cursor-pointer disabled:opacity-50"
+                                  >
+                                    {deletingTestId === pt.id
+                                      ? 'O‘chirilmoqda...'
+                                      : 'Ha, o‘chirish'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteTestId(null)}
+                                    className="px-2 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs font-semibold hover:bg-slate-100 cursor-pointer"
+                                  >
+                                    Yo‘q
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteTestId(pt.id)}
+                                  className="p-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 cursor-pointer"
+                                  title="Practice Testni o‘chirish"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Practice Test Filter Bar for KPI & Student Results */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              <button
+                type="button"
+                onClick={() => setResultsPracticeTestFilter('all')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-colors cursor-pointer ${
+                  resultsPracticeTestFilter === 'all'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                Barcha Practice Testlar ({sessions.length})
+              </button>
+              {effectivePracticeTests.map((pt) => {
+                const count =
+                  practiceTestStatsMap.get(pt.id)?.totalAttempts ?? 0;
+                return (
+                  <button
+                    key={pt.id}
+                    type="button"
+                    onClick={() => setResultsPracticeTestFilter(pt.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-colors cursor-pointer ${
+                      resultsPracticeTestFilter === pt.id
+                        ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    {pt.title} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 4 KPI Strip (Scoped to Selected Practice Test Filter) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-1">
                 <span className="text-xs font-medium text-slate-500">Jami O‘quvchilar</span>
                 <div className="text-3xl font-bold text-slate-900 tabular-nums">
                   {totalStudents}
                 </div>
-                <p className="text-xs text-slate-500">Ro‘yxatdan o‘tgan urinishlar</p>
+                <p className="text-xs text-slate-500">
+                  {resultsPracticeTestFilter === 'all'
+                    ? 'Barcha testlar bo‘yicha urinishlar'
+                    : 'Tanlangan test bo‘yicha urinishlar'}
+                </p>
               </div>
 
               <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-1">
@@ -2301,6 +4268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <thead>
                     <tr className="border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       <th className="py-3 px-4">O‘quvchi (Ism Familiya)</th>
+                      <th className="py-3 px-4">Practice Test</th>
                       <th className="py-3 px-4">Parol</th>
                       <th className="py-3 px-4">Holati va Modul</th>
                       <th className="py-3 px-4">Belgilanishi</th>
@@ -2313,7 +4281,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <tbody className="divide-y divide-slate-100 text-xs">
                     {filteredSessions.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-10 text-center text-slate-500">
+                        <td colSpan={9} className="py-10 text-center text-slate-500">
                           Hozircha o‘quvchilar topilmadi.
                         </td>
                       </tr>
@@ -2330,6 +4298,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         const mathRoute =
                           s.routing?.math ||
                           (s.completedModules.includes('math_1') ? rInfo.math : undefined);
+                        const sTestTitle =
+                          effectivePracticeTests.find(
+                            (pt) => pt.id === (s.testId || DEFAULT_PRACTICE_TEST_ID)
+                          )?.title || 'Practice Test #1';
 
                         return (
                           <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
@@ -2340,6 +4312,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   {s.email}
                                 </div>
                               )}
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <span className="px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-[11px] font-semibold text-slate-700 whitespace-nowrap">
+                                {sTestTitle}
+                              </span>
                             </td>
                             <td className="py-3.5 px-4 font-mono text-slate-600">
                               {s.password}
@@ -2471,6 +4448,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         ) : activeTab === 'questions' ? (
           /* Question Bank Management Tab */
           <div className="space-y-5">
+            {/* Practice Test Selector Bar inside Question Bank */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-slate-900">
+                  Qaysi Practice Test savollar bazasini tahrirlayapsiz?
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Har bir Practice Test o‘zining alohida savollar bazasiga (Reading & Writing + Math) ega.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedPracticeTestId}
+                  onChange={(e) => setSelectedPracticeTestId(e.target.value)}
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-900 focus:border-[#2563eb] focus:outline-none"
+                >
+                  {effectivePracticeTests.map((pt) => {
+                    const st = practiceTestStatsMap.get(pt.id);
+                    return (
+                      <option key={pt.id} value={pt.id}>
+                        {pt.title} ({st?.totalQuestionsCount ?? 0} ta savol)
+                      </option>
+                    );
+                  })}
+                </select>
+                {onSavePracticeTest && (
+                  <button
+                    type="button"
+                    onClick={openCreatePracticeTestModal}
+                    className="px-3 py-2 rounded-xl bg-[#2563eb] text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Yangi Test</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Top-Level Section Switcher: Reading vs Math */}
             <div className="grid grid-cols-1 sm:grid-cols-2 max-w-xl mx-auto gap-3 sm:gap-4">
               <button
@@ -2613,9 +4628,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
+                  {onConsolidateSectionToModule &&
+                    selectedSubModuleNumber === 1 &&
+                    (selectedSection === 'rw' ? rw2Count > 0 : math2Count > 0) && (
+                      <button
+                        type="button"
+                        disabled={isRedistributing}
+                        onClick={() =>
+                          handleTriggerConsolidateToModule(
+                            selectedSection,
+                            selectedSection === 'rw' ? 'rw_1' : 'math_1'
+                          )
+                        }
+                        className="px-3.5 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 text-xs font-bold hover:bg-emerald-100 flex items-center gap-1.5 whitespace-nowrap cursor-pointer disabled:opacity-50"
+                        title="M2 ga tarqalib ketgan savollarni ham M1 (Stage 1) ichiga bitta qilib yig‘ish"
+                      >
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${isRedistributing ? 'animate-spin' : ''}`}
+                        />
+                        <span>
+                          Barchasini M1 ga yig‘ish (
+                          {selectedSection === 'rw' ? rwTotalCount : mathTotalCount} ta)
+                        </span>
+                      </button>
+                    )}
+
                   {onRedistributeSectionQuestions &&
-                    ((selectedSection === 'rw' && rwTotalCount >= 2) ||
-                      (selectedSection === 'math' && mathTotalCount >= 2)) && (
+                    ((selectedSection === 'rw' && rwTotalCount > 27) ||
+                      (selectedSection === 'math' && mathTotalCount > 22)) && (
                       <button
                         type="button"
                         disabled={isRedistributing}
@@ -2639,24 +4679,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       setImportJsonText('');
                       setImportCheckResult(null);
                       setImportActionError(null);
-                      if (
-                        selectedSubModuleNumber === 2 &&
-                        (selectedVariantFilter === 'easy' || selectedVariantFilter === 'hard')
-                      ) {
-                        setImportPlacement(
-                          `${selectedModuleFilter}_${selectedVariantFilter}` as ImportPlacementTarget
-                        );
-                      } else {
-                        setImportPlacement(
-                          selectedSection === 'rw' ? 'rw_auto' : 'math_auto'
-                        );
-                      }
+                      setImportPlacement(getDefaultPlacementForSelectedModule());
                       setIsImportModalOpen(true);
                     }}
                     className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
                   >
                     <Upload className="w-3.5 h-3.5" />
-                    <span>JSON orqali import</span>
+                    <span>
+                      M{selectedSubModuleNumber}
+                      {selectedSubModuleNumber === 2 &&
+                      (selectedVariantFilter === 'easy' || selectedVariantFilter === 'hard')
+                        ? ` (${selectedVariantFilter.toUpperCase()})`
+                        : ''}{' '}
+                      ga JSON import
+                    </span>
                   </button>
 
                   <button
@@ -2664,7 +4700,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Yangi Savol Qo‘shish</span>
+                    <span>
+                      + M{selectedSubModuleNumber}
+                      {selectedSubModuleNumber === 2 &&
+                      (selectedVariantFilter === 'easy' || selectedVariantFilter === 'hard')
+                        ? ` (${selectedVariantFilter.toUpperCase()})`
+                        : ''}{' '}
+                      ga Savol Qo‘shish
+                    </span>
                   </button>
                 </div>
               </div>
@@ -2789,7 +4832,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {selectedSubModuleNumber} qismida hozircha savollar yo‘q
                   </div>
                   <p className="text-xs text-slate-500 max-w-md mx-auto">
-                    Ushbu modulga yangi savol qo‘shishingiz yoki JSON fayl orqali savollar to‘plamini yuklashingiz mumkin.
+                    Ushbu modulga yangi savol qo‘shishingiz yoki JSON fayl orqali faqat shu modulning o‘ziga savollar to‘plamini yuklashingiz mumkin.
                   </p>
                   <div className="flex items-center justify-center gap-3 pt-1">
                     <button
@@ -2798,15 +4841,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setImportJsonText('');
                         setImportCheckResult(null);
                         setImportActionError(null);
-                        setImportPlacement(
-                          selectedSection === 'rw' ? 'rw_auto' : 'math_auto'
-                        );
+                        setImportPlacement(getDefaultPlacementForSelectedModule());
                         setIsImportModalOpen(true);
                       }}
                       className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      <span>JSON orqali import</span>
+                      <span>M{selectedSubModuleNumber} ga JSON import</span>
                     </button>
                     <button
                       type="button"
@@ -2814,7 +4855,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       className="px-4 py-2 rounded-lg bg-[#2563eb] text-white text-xs font-bold hover:bg-[#1d4ed8] flex items-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>Yangi Savol Qo‘shish</span>
+                      <span>+ M{selectedSubModuleNumber} ga Savol Qo‘shish</span>
                     </button>
                   </div>
                 </div>
@@ -2879,13 +4920,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span className="text-xs text-[#2563eb] font-bold">
                               To‘g‘ri javob: {q.correctAnswer}
                             </span>
+
+                            {((q.tableData && q.tableData.headers.length > 0) ||
+                              q.options?.some(
+                                (o) => o.tableData && o.tableData.headers.length > 0
+                              )) && (
+                              <span className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-[#2563eb] text-[11px] font-bold flex items-center gap-1">
+                                <TableIcon className="w-3 h-3" />
+                                <span>Jadval</span>
+                              </span>
+                            )}
+
+                            {q.imageUrl && (
+                              <span className="px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-bold flex items-center gap-1">
+                                <ImageIcon className="w-3 h-3" />
+                                <span>Rasm</span>
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => {
                                 setEditError(null);
-                                setEditingQuestion({ ...q });
+                                setImagePasteStatus(null);
+                                setTablePromptText(formatTableDataToPrompt(q.tableData));
+                                setTableInputMode('prompt');
+                                initOptionTableEditorsFromQuestion(q);
+                                setEditingQuestion({
+                                  ...q,
+                                  tableData: q.tableData
+                                    ? {
+                                        title: q.tableData.title,
+                                        headers: [...q.tableData.headers],
+                                        rows: q.tableData.rows.map((r) => [...r]),
+                                      }
+                                    : undefined,
+                                  options: q.options?.map((opt) => ({
+                                    ...opt,
+                                    tableData: opt.tableData
+                                      ? {
+                                          title: opt.tableData.title,
+                                          headers: [...opt.tableData.headers],
+                                          rows: opt.tableData.rows.map((r) => [...r]),
+                                        }
+                                      : undefined,
+                                  })),
+                                });
                               }}
                               className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
                             >
@@ -2922,6 +5003,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </div>
                         </div>
 
+                        {q.tableData && q.tableData.headers.length > 0 && (
+                          <div className="my-2 overflow-x-auto rounded-lg border border-slate-300 bg-white shadow-2xs">
+                            {q.tableData.title && (
+                              <div className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif">
+                                {q.tableData.title}
+                              </div>
+                            )}
+                            <table className="w-full border-collapse text-left text-xs sat-serif">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-300">
+                                  {q.tableData.headers.map((h, hIdx) => (
+                                    <th
+                                      key={hIdx}
+                                      className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(
+                                          h || `Ustun ${hIdx + 1}`,
+                                          true
+                                        ),
+                                      }}
+                                    />
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200">
+                                {q.tableData.rows.map((row, rIdx) => (
+                                  <tr key={rIdx} className="hover:bg-slate-50/60">
+                                    {q.tableData!.headers.map((_, cIdx) => (
+                                      <td
+                                        key={cIdx}
+                                        className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                        dangerouslySetInnerHTML={{
+                                          __html: renderSATTextWithMath(
+                                            row[cIdx] || '',
+                                            true
+                                          ),
+                                        }}
+                                      />
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {q.imageUrl && (
+                          <div className="my-2 flex justify-center">
+                            <img
+                              src={q.imageUrl}
+                              alt={`Savol #${q.number} tasviri`}
+                              className="max-h-60 w-auto max-w-full rounded-lg border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                            />
+                          </div>
+                        )}
+
                         {q.passage && (
                           <div
                             className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg font-serif leading-relaxed"
@@ -2943,18 +5080,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             {q.options.map((opt) => (
                               <div
                                 key={opt.id}
-                                className={`text-xs px-3 py-2 rounded-lg border sat-serif ${
+                                className={`text-xs px-3 py-2.5 rounded-lg border sat-serif space-y-1.5 ${
                                   opt.id === q.correctAnswer
                                     ? 'bg-emerald-50 border-emerald-300 font-semibold text-emerald-950'
                                     : 'bg-white border-slate-200 text-slate-700'
                                 }`}
                               >
-                                <strong className="font-sans">{opt.id}.</strong>{' '}
-                                <span
-                                  dangerouslySetInnerHTML={{
-                                    __html: renderSATTextWithMath(opt.text, true),
-                                  }}
-                                />
+                                <div className="flex items-start gap-1.5">
+                                  <strong className="font-sans shrink-0">
+                                    {opt.id}.
+                                  </strong>
+                                  {opt.text && (
+                                    <span
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(opt.text, true),
+                                      }}
+                                    />
+                                  )}
+                                </div>
+
+                                {opt.tableData && opt.tableData.headers.length > 0 && (
+                                  <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white shadow-2xs max-w-xs">
+                                    {opt.tableData.title && (
+                                      <div className="bg-slate-100 border-b border-slate-300 px-2.5 py-1 text-[11px] font-bold text-slate-900 text-center sat-serif">
+                                        {opt.tableData.title}
+                                      </div>
+                                    )}
+                                    <table className="w-full border-collapse text-center text-xs sat-serif font-normal">
+                                      <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-300">
+                                          {opt.tableData.headers.map((h, hIdx) => (
+                                            <th
+                                              key={hIdx}
+                                              className="px-2.5 py-1 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                              dangerouslySetInnerHTML={{
+                                                __html: renderSATTextWithMath(
+                                                  h || `Ustun ${hIdx + 1}`,
+                                                  true
+                                                ),
+                                              }}
+                                            />
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-200">
+                                        {opt.tableData.rows.map((row, rIdx) => (
+                                          <tr key={rIdx}>
+                                            {opt.tableData!.headers.map((_, cIdx) => (
+                                              <td
+                                                key={cIdx}
+                                                className="px-2.5 py-1 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                                dangerouslySetInnerHTML={{
+                                                  __html: renderSATTextWithMath(
+                                                    row[cIdx] || '',
+                                                    true
+                                                  ),
+                                                }}
+                                              />
+                                            ))}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -3460,7 +5649,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             type="button"
                             onClick={() => {
                               setEditError(null);
-                              setEditingQuestion({ ...q });
+                              setImagePasteStatus(null);
+                              setTablePromptText(formatTableDataToPrompt(q.tableData));
+                              setTableInputMode('prompt');
+                              initOptionTableEditorsFromQuestion(q);
+                              setEditingQuestion({
+                                ...q,
+                                tableData: q.tableData
+                                  ? {
+                                      title: q.tableData.title,
+                                      headers: [...q.tableData.headers],
+                                      rows: q.tableData.rows.map((r) => [...r]),
+                                    }
+                                  : undefined,
+                                options: q.options?.map((opt) => ({
+                                  ...opt,
+                                  tableData: opt.tableData
+                                    ? {
+                                        title: opt.tableData.title,
+                                        headers: [...opt.tableData.headers],
+                                        rows: opt.tableData.rows.map((r) => [...r]),
+                                      }
+                                    : undefined,
+                                })),
+                              });
                             }}
                             className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
                           >
@@ -4071,7 +6283,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {(() => {
               const sessionVariantQs = getSessionVariantQuestions(
                 questions,
-                inspectedSession.id
+                inspectedSession.id,
+                inspectedSession.testId || DEFAULT_PRACTICE_TEST_ID
               );
               const effRes = getSessionEffectiveResult(inspectedSession);
               const rInfo = getSessionEffectiveRouting(inspectedSession);
@@ -4250,7 +6463,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Modul</label>
+                  <select
+                    value={editingQuestion.moduleId}
+                    onChange={(e) => {
+                      const nextMod = e.target.value as ModuleId;
+                      const nextDomains = domainsForModule(nextMod);
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        moduleId: nextMod,
+                        variant: nextMod.endsWith('_2')
+                          ? editingQuestion.variant
+                          : undefined,
+                        type: nextMod.startsWith('rw_') ? 'mcq' : editingQuestion.type,
+                        domain: nextDomains.includes(editingQuestion.domain || '')
+                          ? editingQuestion.domain
+                          : nextDomains[0],
+                      });
+                    }}
+                    className="w-full rounded-lg border border-slate-300 p-2"
+                  >
+                    {MODULE_ORDER.map((m) => (
+                      <option key={m} value={m}>
+                        {MODULE_CONFIGS[m].shortTitle}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Savol Turi</label>
                   <select
@@ -4431,12 +6673,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
+              {renderTableAndImageEditor({
+                tableData: editingQuestion.tableData,
+                onChangeTableData: (nextTable) =>
+                  setEditingQuestion({ ...editingQuestion, tableData: nextTable }),
+                imageUrl: editingQuestion.imageUrl,
+                onChangeImageUrl: (nextImg) =>
+                  setEditingQuestion({ ...editingQuestion, imageUrl: nextImg }),
+                passageText: editingQuestion.passage || '',
+                onChangePassageText: (nextPass) =>
+                  setEditingQuestion((prev) =>
+                    prev ? { ...prev, passage: nextPass } : prev
+                  ),
+                promptText: editingQuestion.prompt || '',
+                onChangePromptText: (nextPrompt) =>
+                  setEditingQuestion((prev) =>
+                    prev ? { ...prev, prompt: nextPrompt } : prev
+                  ),
+              })}
+
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block font-semibold text-slate-700">
                     Savol sharti (Prompt) *
                   </label>
-                  <span className="text-[11px] text-slate-500">Formulalar: $x^2+1$</span>
+                  <span className="text-[11px] text-slate-500">
+                    Matematik formulalar avtomatik LaTeX formatda ko‘rsatiladi
+                  </span>
                 </div>
                 <textarea
                   rows={3}
@@ -4446,27 +6709,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className="w-full rounded-lg border border-slate-300 p-2.5 text-xs focus:border-[#2563eb] focus:outline-none"
                 />
+                {editingQuestion.prompt.trim() && (
+                  <div className="mt-1.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-900 space-y-1">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      LaTeX ko‘rinishi:
+                    </div>
+                    <div
+                      className="sat-serif leading-relaxed"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSATTextWithMath(editingQuestion.prompt),
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               {editingQuestion.type === 'mcq' && editingQuestion.options && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {editingQuestion.options.map((opt, idx) => (
-                    <div key={opt.id}>
-                      <label className="block font-semibold text-slate-700 mb-1">
-                        Variant {opt.id}
-                      </label>
-                      <input
-                        type="text"
-                        value={opt.text}
-                        onChange={(e) => {
-                          const nextOpts = [...(editingQuestion.options || [])];
-                          nextOpts[idx] = { ...opt, text: e.target.value };
-                          setEditingQuestion({ ...editingQuestion, options: nextOpts });
-                        }}
-                        className="w-full rounded-lg border border-slate-300 p-2 text-xs"
-                      />
-                    </div>
-                  ))}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">
+                      Javob variantlari (A, B, C, D) — har bir variantga matn, formula yoki jadval kiritish mumkin
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {editingQuestion.options.map((opt, idx) => (
+                      <div key={opt.id}>
+                        {renderOptionTableEditor({
+                          optId: opt.id,
+                          optText: opt.text,
+                          onChangeOptText: (nextText) => {
+                            const nextOpts = [...(editingQuestion.options || [])];
+                            nextOpts[idx] = { ...opt, text: nextText };
+                            setEditingQuestion({
+                              ...editingQuestion,
+                              options: nextOpts,
+                            });
+                          },
+                          tableData: opt.tableData,
+                          onChangeTableData: (nextTable) => {
+                            const nextOpts = [...(editingQuestion.options || [])];
+                            nextOpts[idx] = { ...opt, tableData: nextTable };
+                            setEditingQuestion({
+                              ...editingQuestion,
+                              options: nextOpts,
+                            });
+                          },
+                        })}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -4700,67 +6991,94 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
+              {renderTableAndImageEditor({
+                tableData: newQTableData,
+                onChangeTableData: setNewQTableData,
+                imageUrl: newQImageUrl || undefined,
+                onChangeImageUrl: (nextImg) => setNewQImageUrl(nextImg || ''),
+                passageText: newQPassage,
+                onChangePassageText: setNewQPassage,
+                promptText: newQPrompt,
+                onChangePromptText: setNewQPrompt,
+              })}
+
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block font-semibold text-slate-700">
                     Savol sharti (Prompt) *
                   </label>
-                  <span className="text-[11px] text-slate-500">Formulalar: $x^2+1$</span>
+                  <span className="text-[11px] text-slate-500">
+                    Matematik formulalar avtomatik LaTeX formatda ko‘rsatiladi
+                  </span>
                 </div>
                 <textarea
                   rows={2}
                   value={newQPrompt}
                   onChange={(e) => setNewQPrompt(e.target.value)}
-                  placeholder="Savolni kiriting..."
+                  placeholder="Savolni kiriting (masalan: For which of the following tables are all the values of x and y solutions to y < 4x + 15?)..."
                   className="w-full rounded-lg border border-slate-300 p-2.5"
                 />
+                {newQPrompt.trim() && (
+                  <div className="mt-1.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-900 space-y-1">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      LaTeX ko‘rinishi:
+                    </div>
+                    <div
+                      className="sat-serif leading-relaxed"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSATTextWithMath(newQPrompt),
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               {(newQModule.startsWith('rw_') || newQType === 'mcq') && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Variant A
-                    </label>
-                    <input
-                      type="text"
-                      value={newQOptA}
-                      onChange={(e) => setNewQOptA(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 p-2"
-                    />
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800">
+                      Javob variantlari (A, B, C, D) — har bir variantga matn, formula yoki jadval kiritish mumkin
+                    </span>
                   </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Variant B
-                    </label>
-                    <input
-                      type="text"
-                      value={newQOptB}
-                      onChange={(e) => setNewQOptB(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 p-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Variant C
-                    </label>
-                    <input
-                      type="text"
-                      value={newQOptC}
-                      onChange={(e) => setNewQOptC(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 p-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Variant D
-                    </label>
-                    <input
-                      type="text"
-                      value={newQOptD}
-                      onChange={(e) => setNewQOptD(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 p-2"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {(
+                      [
+                        {
+                          id: 'A' as const,
+                          text: newQOptA,
+                          setText: setNewQOptA,
+                        },
+                        {
+                          id: 'B' as const,
+                          text: newQOptB,
+                          setText: setNewQOptB,
+                        },
+                        {
+                          id: 'C' as const,
+                          text: newQOptC,
+                          setText: setNewQOptC,
+                        },
+                        {
+                          id: 'D' as const,
+                          text: newQOptD,
+                          setText: setNewQOptD,
+                        },
+                      ]
+                    ).map((item) => (
+                      <div key={item.id}>
+                        {renderOptionTableEditor({
+                          optId: item.id,
+                          optText: item.text,
+                          onChangeOptText: item.setText,
+                          tableData: newQOptTables[item.id],
+                          onChangeTableData: (nextTable) =>
+                            setNewQOptTables((prev) => ({
+                              ...prev,
+                              [item.id]: nextTable,
+                            })),
+                        })}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -4854,7 +7172,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setImportCheckResult(
                           parseQuestionImport(importJsonText, {
                             targetPlacement: val,
-                            autoBalanceModules: true,
+                            autoBalanceModules:
+                              val === 'rw_auto' || val === 'math_auto',
                             fallbackSection: selectedSection,
                           })
                         );
@@ -4862,23 +7181,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }}
                     className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs font-medium"
                   >
+                    <option value="rw_1">
+                      Reading & Writing — Faqat M1 (Stage 1) ga kiritish
+                    </option>
+                    <option value="rw_2">
+                      Reading & Writing — Faqat M2 (Umumiy) ga kiritish
+                    </option>
+                    <option value="rw_2_easy">
+                      Reading & Writing — Faqat M2 (Easy) ga kiritish
+                    </option>
+                    <option value="rw_2_hard">
+                      Reading & Writing — Faqat M2 (Hard) ga kiritish
+                    </option>
+                    <option value="math_1">
+                      Math — Faqat M1 (Stage 1) ga kiritish
+                    </option>
+                    <option value="math_2">
+                      Math — Faqat M2 (Umumiy) ga kiritish
+                    </option>
+                    <option value="math_2_easy">
+                      Math — Faqat M2 (Easy) ga kiritish
+                    </option>
+                    <option value="math_2_hard">
+                      Math — Faqat M2 (Hard) ga kiritish
+                    </option>
                     <option value="auto">
-                      Avtomatik (moduleId, qiyinlik darajasi va joylashuv bo‘yicha)
+                      JSON ichidagi o‘z moduleId ko‘rsatkichi bo‘yicha (bo‘lib yubormasdan)
                     </option>
                     <option value="rw_auto">
-                      Reading & Writing — Qiyinlik va joylashuv bo‘yicha M1 va M2 ga ajratish
+                      Reading & Writing — M1 va M2 ga avtomatik bo‘lib taqsimlash
                     </option>
-                    <option value="rw_1">Reading & Writing — M1</option>
-                    <option value="rw_2">Reading & Writing — M2 (Umumiy)</option>
-                    <option value="rw_2_easy">Reading & Writing — M2 (Easy)</option>
-                    <option value="rw_2_hard">Reading & Writing — M2 (Hard)</option>
                     <option value="math_auto">
-                      Math — Qiyinlik va joylashuv bo‘yicha M1 va M2 ga ajratish
+                      Math — M1 va M2 ga avtomatik bo‘lib taqsimlash
                     </option>
-                    <option value="math_1">Math — M1</option>
-                    <option value="math_2">Math — M2 (Umumiy)</option>
-                    <option value="math_2_easy">Math — M2 (Easy)</option>
-                    <option value="math_2_hard">Math — M2 (Hard)</option>
                   </select>
                 </div>
 
@@ -4926,7 +7261,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     setImportCheckResult(
                       parseQuestionImport(val, {
                         targetPlacement: importPlacement,
-                        autoBalanceModules: true,
+                        autoBalanceModules:
+                          importPlacement === 'rw_auto' ||
+                          importPlacement === 'math_auto',
                         fallbackSection: selectedSection,
                       })
                     );
@@ -5102,6 +7439,167 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Modal: Create or Edit Practice Test */}
+      {isPracticeTestModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSavePracticeTestForm}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col"
+          >
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {editingPracticeTest
+                    ? 'Practice Testni Tahrirlash'
+                    : 'Yangi Practice Test Qo‘shish'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {editingPracticeTest
+                    ? 'Test nomi, tavsifi, modul vaqtlari va faollik holatini o‘zgartiring.'
+                    : 'Yangi Practice Test yarating. Uning o‘z savollar bazasi va alohida statistikasi bo‘ladi.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPracticeTestModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs">
+              {practiceTestModalError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 font-semibold">
+                  {practiceTestModalError}
+                </div>
+              )}
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Practice Test Nomi *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={ptTitle}
+                  onChange={(e) => setPtTitle(e.target.value)}
+                  placeholder="Masalan: Full-Length Practice Test #2"
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-xs focus:border-[#2563eb] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Tavsifi (Description)
+                </label>
+                <textarea
+                  rows={2}
+                  value={ptDescription}
+                  onChange={(e) => setPtDescription(e.target.value)}
+                  placeholder="Official Bluebook formatidagi to‘liq 4 modulli adaptiv imtihon."
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-xs focus:border-[#2563eb] focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Holati (Status)
+                  </label>
+                  <select
+                    value={ptStatus}
+                    onChange={(e) => setPtStatus(e.target.value as 'active' | 'draft')}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs bg-white"
+                  >
+                    <option value="active">Faol (O‘quvchilarga ko‘rinadi)</option>
+                    <option value="draft">Qoralama (Faqat adminga)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    R&W Modul Vaqti (daq)
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={120}
+                    value={ptRwMinutes}
+                    onChange={(e) => setPtRwMinutes(Number(e.target.value))}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">
+                    Math Modul Vaqti (daq)
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={120}
+                    value={ptMathMinutes}
+                    onChange={(e) => setPtMathMinutes(Number(e.target.value))}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+              </div>
+
+              {!editingPracticeTest && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-1.5">
+                  <label className="block font-semibold text-slate-800">
+                    Boshlang‘ich savollar bazasi
+                  </label>
+                  <select
+                    value={ptCloneFromId}
+                    onChange={(e) => setPtCloneFromId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                  >
+                    <option value="">
+                      Bo‘sh savollar bazasi bilan boshlash (0 ta savol — keyin import qilinadi)
+                    </option>
+                    {effectivePracticeTests.map((t) => {
+                      const st = practiceTestStatsMap.get(t.id);
+                      return (
+                        <option key={t.id} value={t.id}>
+                          &laquo;{t.title}&raquo; savollaridan nusxa olish (
+                          {st?.totalQuestionsCount ?? 0} ta savol)
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="text-[11px] text-slate-500">
+                    Yangi test yaratilgach, &laquo;Savollarni Tahrirlash&raquo; tugmasi orqali unga alohida savollar qo‘shishingiz yoki JSON import qilishingiz mumkin.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setIsPracticeTestModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Bekor qilish
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingPracticeTest}
+                className="px-4 py-2 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingPracticeTest
+                  ? 'Saqlanmoqda...'
+                  : editingPracticeTest
+                  ? 'O‘zgarishlarni saqlash'
+                  : 'Practice Testni Yaratish'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

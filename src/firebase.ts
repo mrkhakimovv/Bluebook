@@ -19,6 +19,7 @@ import {
   StudentSession,
   ScoringConfig,
   DEFAULT_SCORING_CONFIG,
+  PracticeTest,
 } from './types/sat';
 
 const app = initializeApp(firebaseConfig);
@@ -138,6 +139,10 @@ export function sanitizeSessionForFirestore(
     score: session.score,
   };
 
+  if (session.testId && typeof session.testId === 'string' && session.testId.trim()) {
+    payload.testId = session.testId.trim().slice(0, 128);
+  }
+
   if (session.email && typeof session.email === 'string' && session.email.trim()) {
     payload.email = session.email.trim().toLowerCase().slice(0, 160);
   }
@@ -190,6 +195,69 @@ export function sanitizeSessionForFirestore(
   return payload;
 }
 
+function serializeTableDataForFirestore(
+  td: SATQuestion['tableData']
+): Record<string, unknown> | undefined {
+  if (
+    !td ||
+    typeof td !== 'object' ||
+    !Array.isArray(td.headers) ||
+    td.headers.length === 0
+  ) {
+    return undefined;
+  }
+  const colCount = Math.min(12, td.headers.length);
+  const cleanHeaders = td.headers
+    .slice(0, colCount)
+    .map((h) => String(h ?? '').trim().slice(0, 300));
+  const rawRows = Array.isArray(td.rows) ? td.rows.slice(0, 40) : [];
+  const firestoreRows = rawRows.map((row) => {
+    const arr = Array.isArray(row)
+      ? row
+      : row && typeof row === 'object' && Array.isArray((row as { cells?: unknown[] }).cells)
+      ? (row as { cells: unknown[] }).cells
+      : [];
+    const cells: string[] = [];
+    for (let i = 0; i < colCount; i++) {
+      cells.push(String(arr[i] ?? '').trim().slice(0, 500));
+    }
+    return { cells };
+  });
+  return {
+    ...(td.title && td.title.trim() ? { title: td.title.trim().slice(0, 300) } : {}),
+    headers: cleanHeaders,
+    rows: firestoreRows,
+  };
+}
+
+export function deserializeTableDataFromFirestore(
+  rawTd: unknown
+): SATQuestion['tableData'] {
+  if (!rawTd || typeof rawTd !== 'object') return undefined;
+  const td = rawTd as Record<string, unknown>;
+  const headers = Array.isArray(td.headers)
+    ? td.headers.map((h) => String(h ?? ''))
+    : [];
+  if (headers.length === 0) return undefined;
+  const rawRows = Array.isArray(td.rows) ? td.rows : [];
+  const rows: string[][] = rawRows.map((r) => {
+    if (Array.isArray(r)) {
+      return r.map((c) => String(c ?? ''));
+    }
+    if (r && typeof r === 'object' && Array.isArray((r as { cells?: unknown[] }).cells)) {
+      return (r as { cells: unknown[] }).cells.map((c) => String(c ?? ''));
+    }
+    return headers.map(() => '');
+  });
+  return {
+    ...(typeof td.title === 'string' && td.title.trim()
+      ? { title: td.title.trim() }
+      : {}),
+    headers,
+    rows,
+  };
+}
+
 export function sanitizeQuestionForFirestore(
   q: SATQuestion
 ): Record<string, unknown> {
@@ -205,6 +273,10 @@ export function sanitizeQuestionForFirestore(
     correctAnswer: (q.correctAnswer || 'A').slice(0, 64),
     scored: q.scored !== false,
   };
+
+  if (q.testId && typeof q.testId === 'string' && q.testId.trim()) {
+    payload.testId = q.testId.trim().slice(0, 128);
+  }
 
   if (
     (q.moduleId === 'rw_2' || q.moduleId === 'math_2') &&
@@ -243,10 +315,24 @@ export function sanitizeQuestionForFirestore(
     payload.calibratedAt = Math.max(0, Math.round(q.calibratedAt));
   }
   if (q.options && q.options.length > 0) {
-    payload.options = q.options.slice(0, 8);
+    payload.options = q.options.slice(0, 8).map((opt) => {
+      const serializedOptTable = serializeTableDataForFirestore(opt.tableData);
+      return {
+        id: opt.id,
+        text: String(opt.text ?? '').slice(0, 2000),
+        ...(serializedOptTable ? { tableData: serializedOptTable } : {}),
+      };
+    });
   }
   if (q.mathEquation && q.mathEquation.length > 0) {
     payload.mathEquation = q.mathEquation.slice(0, 10);
+  }
+  if (q.imageUrl && typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
+    payload.imageUrl = q.imageUrl.trim().slice(0, 800000);
+  }
+  const serializedTable = serializeTableDataForFirestore(q.tableData);
+  if (serializedTable) {
+    payload.tableData = serializedTable;
   }
 
   return payload;
@@ -574,9 +660,26 @@ export function subscribeToQuestions(
     (snapshot) => {
       const map = new Map<string, SATQuestion>();
       snapshot.forEach((docSnap) => {
-        const data = docSnap.data() as SATQuestion;
-        const id = data.id || docSnap.id;
-        map.set(id, { ...data, id });
+        const rawData = docSnap.data() as Record<string, unknown>;
+        const id = (rawData.id as string) || docSnap.id;
+        const normalizedTableData = deserializeTableDataFromFirestore(rawData.tableData);
+        const normalizedOptions = Array.isArray(rawData.options)
+          ? (rawData.options as Record<string, unknown>[]).map((opt) => {
+              const optTable = deserializeTableDataFromFirestore(opt.tableData);
+              return {
+                id: (String(opt.id || 'A').trim().toUpperCase() as 'A' | 'B' | 'C' | 'D'),
+                text: String(opt.text ?? ''),
+                ...(optTable ? { tableData: optTable } : {}),
+              };
+            })
+          : undefined;
+        const qItem: SATQuestion = {
+          ...(rawData as unknown as SATQuestion),
+          id,
+          tableData: normalizedTableData,
+          ...(normalizedOptions ? { options: normalizedOptions } : {}),
+        };
+        map.set(id, qItem);
       });
       onData(Array.from(map.values()));
     },
@@ -585,3 +688,77 @@ export function subscribeToQuestions(
     }
   );
 }
+
+export function sanitizePracticeTestForFirestore(
+  test: PracticeTest
+): Record<string, unknown> {
+  const safeId = test.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  return {
+    id: safeId,
+    title: (test.title || 'Practice Test').slice(0, 160),
+    description: (test.description || '').slice(0, 1000),
+    status: test.status === 'draft' ? 'draft' : 'active',
+    rwDurationMinutes: Math.max(
+      5,
+      Math.min(180, Math.round(Number(test.rwDurationMinutes) || 32))
+    ),
+    mathDurationMinutes: Math.max(
+      5,
+      Math.min(180, Math.round(Number(test.mathDurationMinutes) || 35))
+    ),
+    createdAt: (test.createdAt || new Date().toISOString()).slice(0, 64),
+    updatedAt: (test.updatedAt || new Date().toISOString()).slice(0, 64),
+  };
+}
+
+export async function savePracticeTestToFirestore(test: PracticeTest) {
+  const sanitized = sanitizePracticeTestForFirestore(test);
+  const docId = String(sanitized.id);
+  const path = `practice_tests/${docId}`;
+  try {
+    await setDoc(doc(db, 'practice_tests', docId), sanitized);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function removePracticeTestFromFirestore(testId: string) {
+  const safeId = testId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  const path = `practice_tests/${safeId}`;
+  try {
+    await deleteDoc(doc(db, 'practice_tests', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeToPracticeTests(
+  onData: (tests: PracticeTest[]) => void
+) {
+  const path = 'practice_tests';
+  const q = query(
+    collection(db, path),
+    where('status', 'in', ['active', 'draft']),
+    limit(100)
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: PracticeTest[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as PracticeTest;
+        list.push({ ...data, id: data.id || docSnap.id });
+      });
+      list.sort(
+        (a, b) =>
+          new Date(a.createdAt || 0).getTime() -
+          new Date(b.createdAt || 0).getTime()
+      );
+      onData(list);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+

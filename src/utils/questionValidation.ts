@@ -5,10 +5,12 @@ import {
   QuestionDifficulty,
   QuestionVariant,
   QuestionOption,
+  QuestionTableData,
   MODULE_CONFIGS,
   MODULE_ORDER,
   RW_DOMAINS,
   MATH_DOMAINS,
+  DEFAULT_PRACTICE_TEST_ID,
 } from '../types/sat';
 
 const VALID_MODULES: ModuleId[] = ['rw_1', 'rw_2', 'math_1', 'math_2'];
@@ -182,6 +184,43 @@ export function inferSectionFromQuestionData(
   return fallbackSection;
 }
 
+export function normalizeTableDataObject(
+  rawTable: unknown
+): QuestionTableData | undefined {
+  if (!rawTable) return undefined;
+  if (typeof rawTable === 'string') {
+    return parseTablePromptToData(rawTable);
+  }
+  if (typeof rawTable !== 'object') return undefined;
+  const td = rawTable as Record<string, unknown>;
+  const rawHeaders = Array.isArray(td.headers)
+    ? td.headers.map((h) => String(h ?? '').trim())
+    : [];
+  const colCount = rawHeaders.length;
+  if (colCount === 0) return undefined;
+
+  const rawRows = Array.isArray(td.rows) ? td.rows : [];
+  const cleanRows: string[][] = rawRows.map((row) => {
+    const arr = Array.isArray(row)
+      ? row
+      : row && typeof row === 'object' && Array.isArray((row as { cells?: unknown[] }).cells)
+      ? (row as { cells: unknown[] }).cells
+      : [];
+    const cells: string[] = [];
+    for (let i = 0; i < colCount; i++) {
+      cells.push(String(arr[i] ?? '').trim());
+    }
+    return cells;
+  });
+  const cleanTitle =
+    typeof td.title === 'string' && td.title.trim() ? td.title.trim() : undefined;
+  return {
+    ...(cleanTitle ? { title: cleanTitle } : {}),
+    headers: rawHeaders,
+    rows: cleanRows,
+  };
+}
+
 export function normalizeQuestionInput<T extends Partial<SATQuestion>>(input: T): T {
   const copy: Partial<SATQuestion> = { ...input };
 
@@ -261,10 +300,23 @@ export function normalizeQuestionInput<T extends Partial<SATQuestion>>(input: T)
   }
 
   if (copy.type === 'mcq' && Array.isArray(copy.options)) {
-    copy.options = copy.options.map((opt) => ({
-      id: opt.id,
-      text: (opt.text || '').trim(),
-    }));
+    copy.options = copy.options.map((opt) => {
+      let optText = (opt.text || '').trim();
+      let optTable = normalizeTableDataObject(opt.tableData);
+      // If option text contains multi-line pipe-delimited rows and no explicit tableData, extract it automatically
+      if (!optTable && optText.includes('|') && optText.includes('\n')) {
+        const extracted = parseTextToTableData(optText);
+        if (extracted.tableData && extracted.tableData.headers.length > 0) {
+          optTable = extracted.tableData;
+          optText = extracted.remainingText;
+        }
+      }
+      return {
+        id: opt.id,
+        text: optText,
+        ...(optTable ? { tableData: optTable } : {}),
+      };
+    });
   } else if (copy.type === 'spr') {
     copy.options = undefined;
   }
@@ -274,7 +326,219 @@ export function normalizeQuestionInput<T extends Partial<SATQuestion>>(input: T)
     copy.mathEquation = cleaned.length > 0 ? cleaned : undefined;
   }
 
+  if (typeof copy.imageUrl === 'string') {
+    const trimmed = copy.imageUrl.trim();
+    copy.imageUrl = trimmed.length > 0 ? trimmed : undefined;
+  } else {
+    copy.imageUrl = undefined;
+  }
+
+  copy.tableData = normalizeTableDataObject(copy.tableData);
+
   return copy as T;
+}
+
+/**
+ * Extracts pipe-delimited (`|`) or tab-delimited table rows from raw text
+ * and returns both the structured QuestionTableData and the remaining prose text.
+ */
+export function parseTextToTableData(rawText: string): {
+  tableData?: QuestionTableData;
+  remainingText: string;
+} {
+  const lines = (rawText || '').split(/\r?\n/);
+  const tableLines: string[][] = [];
+  const otherLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      otherLines.push(line);
+      continue;
+    }
+    // Ignore markdown separator lines like |---|---|
+    if (/^\|?[\s\-:|]+\|[\s\-:|]+$/.test(trimmed)) {
+      continue;
+    }
+    if (trimmed.includes('|')) {
+      const parts = trimmed
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map((c) => c.trim());
+      if (parts.length >= 2) {
+        tableLines.push(parts);
+        continue;
+      }
+    } else if (trimmed.includes('\t')) {
+      const parts = trimmed.split('\t').map((c) => c.trim());
+      if (parts.length >= 2) {
+        tableLines.push(parts);
+        continue;
+      }
+    }
+    otherLines.push(line);
+  }
+
+  if (tableLines.length === 0) {
+    return { remainingText: rawText };
+  }
+
+  const maxCols = Math.min(
+    10,
+    Math.max(2, ...tableLines.map((r) => r.length))
+  );
+  const normalizedLines = tableLines.map((r) => {
+    const row: string[] = [];
+    for (let i = 0; i < maxCols; i++) {
+      row.push(r[i] ?? '');
+    }
+    return row;
+  });
+
+  const headers = normalizedLines[0];
+  const rows =
+    normalizedLines.length > 1
+      ? normalizedLines.slice(1)
+      : [headers.map(() => '')];
+
+  return {
+    tableData: {
+      headers,
+      rows,
+    },
+    remainingText: otherLines.join('\n').trim(),
+  };
+}
+
+export const SAMPLE_TABLE_PROMPT = `Sarlavha: Bird Species and Mean Body Mass
+Species | Mean body mass (g) | Uses broken-wing display?
+Common snipe | 126 | Yes
+Common ringed plover | 64 | Yes
+Pied-billed grebe | 442 | No`;
+
+export const SAMPLE_OPTION_TABLE_PROMPT = `x | y
+1 | 15
+2 | 19
+3 | 23`;
+
+/**
+ * Formats a structured QuestionTableData object into a clean text prompt
+ * (with optional "Sarlavha: ..." line + pipe-separated rows).
+ */
+export function formatTableDataToPrompt(tableData?: QuestionTableData): string {
+  if (!tableData || !Array.isArray(tableData.headers) || tableData.headers.length === 0) {
+    return '';
+  }
+  const lines: string[] = [];
+  if (tableData.title && tableData.title.trim()) {
+    lines.push(`Sarlavha: ${tableData.title.trim()}`);
+  }
+  lines.push(tableData.headers.map((h) => (h ?? '').trim()).join(' | '));
+  for (const row of tableData.rows || []) {
+    lines.push(
+      tableData.headers.map((_, idx) => (row[idx] ?? '').trim()).join(' | ')
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Parses a text prompt (pipe-separated `|`, tab-separated `\t`, or semicolon `;`)
+ * into a structured QuestionTableData object.
+ */
+export function parseTablePromptToData(rawPrompt: string): QuestionTableData | undefined {
+  const rawLines = (rawPrompt || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (rawLines.length === 0) return undefined;
+
+  let title: string | undefined;
+  const contentLines: string[] = [];
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    // Ignore markdown separator rows like |---|---|
+    if (/^\|?[\s\-:|]+\|[\s\-:|]+$/.test(line)) {
+      continue;
+    }
+    const titleMatch = line.match(/^(?:sarlavha|title|jadval\s*nomi|#)\s*[:\-]?\s*(.+)$/i);
+    if (i === 0 && titleMatch && !line.includes('|') && !line.includes('\t')) {
+      title = titleMatch[1].trim();
+      continue;
+    }
+    // Also if the very first line has no delimiter (|, \t, ;) and the next line DOES have a delimiter, treat first line as title
+    if (
+      i === 0 &&
+      !title &&
+      !line.includes('|') &&
+      !line.includes('\t') &&
+      !line.includes(';') &&
+      rawLines.length >= 2 &&
+      (rawLines[1].includes('|') || rawLines[1].includes('\t') || rawLines[1].includes(';'))
+    ) {
+      title = line.replace(/^#+\s*/, '').trim();
+      continue;
+    }
+    contentLines.push(line);
+  }
+
+  if (contentLines.length === 0) return undefined;
+
+  const parsedRows: string[][] = [];
+  for (const line of contentLines) {
+    if (line.includes('|')) {
+      const cells = line
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map((c) => c.trim());
+      if (cells.length >= 1) {
+        parsedRows.push(cells);
+      }
+    } else if (line.includes('\t')) {
+      const cells = line.split('\t').map((c) => c.trim());
+      if (cells.length >= 1) {
+        parsedRows.push(cells);
+      }
+    } else if (line.includes(';')) {
+      const cells = line.split(';').map((c) => c.trim());
+      if (cells.length >= 1) {
+        parsedRows.push(cells);
+      }
+    } else {
+      parsedRows.push([line]);
+    }
+  }
+
+  if (parsedRows.length === 0) return undefined;
+
+  const maxCols = Math.min(
+    10,
+    Math.max(1, ...parsedRows.map((r) => r.length))
+  );
+
+  const normalized = parsedRows.map((r) => {
+    const row: string[] = [];
+    for (let i = 0; i < maxCols; i++) {
+      row.push(r[i] ?? '');
+    }
+    return row;
+  });
+
+  const headers = normalized[0];
+  const rows =
+    normalized.length > 1
+      ? normalized.slice(1)
+      : [headers.map(() => '')];
+
+  return {
+    ...(title ? { title } : {}),
+    headers,
+    rows,
+  };
 }
 
 function isValidSprSingleToken(token: string): boolean {
@@ -369,8 +633,12 @@ export function validateQuestionInput(raw: Partial<SATQuestion>): string | null 
     }
     for (const id of OPTION_IDS) {
       const found = q.options.find((o) => o.id === id);
-      if (!found || !found.text || found.text.trim().length === 0) {
-        return `Variant ${id} matni to‘ldirilishi shart.`;
+      const hasText = Boolean(found && found.text && found.text.trim().length > 0);
+      const hasTable = Boolean(
+        found && found.tableData && Array.isArray(found.tableData.headers) && found.tableData.headers.length > 0
+      );
+      if (!hasText && !hasTable) {
+        return `Variant ${id} matni yoki jadvali to‘ldirilishi shart.`;
       }
     }
     if (!q.correctAnswer || !OPTION_IDS.includes(q.correctAnswer as 'A' | 'B' | 'C' | 'D')) {
@@ -431,9 +699,11 @@ function parseRawOptions(rawOpts: unknown): QuestionOption[] | undefined {
       if (item && typeof item === 'object') {
         const obj = item as Record<string, unknown>;
         const optId = String(obj.id || id).trim().toUpperCase() as 'A' | 'B' | 'C' | 'D';
+        const optTable = normalizeTableDataObject(obj.tableData ?? obj.table);
         return {
           id: OPTION_IDS.includes(optId) ? optId : id,
           text: String(obj.text ?? '').trim(),
+          ...(optTable ? { tableData: optTable } : {}),
         };
       }
       return { id, text: '' };
@@ -442,10 +712,24 @@ function parseRawOptions(rawOpts: unknown): QuestionOption[] | undefined {
 
   if (typeof rawOpts === 'object') {
     const obj = rawOpts as Record<string, unknown>;
-    return OPTION_IDS.map((id) => ({
-      id,
-      text: String(obj[id] ?? obj[id.toLowerCase()] ?? '').trim(),
-    }));
+    return OPTION_IDS.map((id) => {
+      const rawVal = obj[id] ?? obj[id.toLowerCase()];
+      if (rawVal && typeof rawVal === 'object') {
+        const valObj = rawVal as Record<string, unknown>;
+        const optTable = normalizeTableDataObject(
+          valObj.tableData ?? valObj.table ?? (Array.isArray(valObj.headers) ? valObj : undefined)
+        );
+        return {
+          id,
+          text: String(valObj.text ?? '').trim(),
+          ...(optTable ? { tableData: optTable } : {}),
+        };
+      }
+      return {
+        id,
+        text: String(rawVal ?? '').trim(),
+      };
+    });
   }
 
   return undefined;
@@ -557,85 +841,77 @@ function distributeSectionEntriesByDifficultyAndPosition(
   );
   const hasBothModulesExplicit = hasExplicitM1 && hasExplicitM2;
 
-  // Case 1: Small batch (<= maxPerMod) with an explicit single-module / single-variant target
-  // and without conflicting explicit multi-module tags.
-  if (secEntries.length <= maxPerMod && !hasBothModulesExplicit) {
-    if (targetPlacement === 'rw_2_easy' || targetPlacement === 'math_2_easy') {
-      for (const e of secEntries) {
-        e.item.moduleId = m2Id;
-        e.item.variant = 'easy';
-      }
-      return;
+  // 1. Strict single-module / single-variant placement:
+  // Whenever the admin selects a specific module (e.g. rw_1, math_1, rw_2, math_2, rw_2_easy, etc.),
+  // place ALL questions into that exact module without ever splitting them across M1 and M2.
+  if (targetPlacement === 'rw_1' || targetPlacement === 'math_1') {
+    for (const e of secEntries) {
+      e.item.moduleId = m1Id;
+      e.item.variant = undefined;
     }
-    if (targetPlacement === 'rw_2_hard' || targetPlacement === 'math_2_hard') {
-      for (const e of secEntries) {
-        e.item.moduleId = m2Id;
-        e.item.variant = 'hard';
-      }
-      return;
+    return;
+  }
+  if (targetPlacement === 'rw_2_easy' || targetPlacement === 'math_2_easy') {
+    for (const e of secEntries) {
+      e.item.moduleId = m2Id;
+      e.item.variant = 'easy';
     }
-    if (targetPlacement === m1Id && !hasExplicitM2) {
-      for (const e of secEntries) {
-        e.item.moduleId = m1Id;
+    return;
+  }
+  if (targetPlacement === 'rw_2_hard' || targetPlacement === 'math_2_hard') {
+    for (const e of secEntries) {
+      e.item.moduleId = m2Id;
+      e.item.variant = 'hard';
+    }
+    return;
+  }
+  if (targetPlacement === 'rw_2' || targetPlacement === 'math_2') {
+    for (const e of secEntries) {
+      e.item.moduleId = m2Id;
+      if (e.explicitVariant === 'easy' || e.explicitVariant === 'hard') {
+        e.item.variant = e.explicitVariant;
+      } else {
         e.item.variant = undefined;
       }
-      return;
-    }
-    if (targetPlacement === m2Id) {
-      for (const e of secEntries) {
-        e.item.moduleId = m2Id;
-        if (e.explicitVariant === 'easy' || e.explicitVariant === 'hard') {
-          e.item.variant = e.explicitVariant;
-        } else {
-          const tier = inferDifficultyTier(e.item);
-          if (tier === 'easy') e.item.variant = 'easy';
-          else if (tier === 'hard') e.item.variant = 'hard';
-          else e.item.variant = undefined;
-        }
-      }
-      return;
-    }
-    if (
-      targetPlacement === 'auto' &&
-      !autoBalance &&
-      secEntries.every((e) => e.explicitModuleId)
-    ) {
-      for (const e of secEntries) {
-        e.item.moduleId = e.explicitModuleId!;
-        e.item.variant =
-          e.item.moduleId === m2Id &&
-          (e.explicitVariant === 'easy' || e.explicitVariant === 'hard')
-            ? e.explicitVariant
-            : undefined;
-      }
-      return;
-    }
-  }
-
-  // If only 1 question in total for this section, keep it in its resolved module
-  if (secEntries.length === 1) {
-    const only = secEntries[0];
-    if (only.explicitModuleId === m2Id || targetPlacement.endsWith('_2')) {
-      only.item.moduleId = m2Id;
-      only.item.variant =
-        only.explicitVariant === 'easy' || only.explicitVariant === 'hard'
-          ? only.explicitVariant
-          : inferDifficultyTier(only.item) === 'hard'
-          ? 'hard'
-          : 'easy';
-    } else {
-      only.item.moduleId = m1Id;
-      only.item.variant = undefined;
     }
     return;
   }
 
-  // Case 2: Split across Module 1 (m1Id) and Module 2 (m2Id) based on difficulty level and position.
-  // Calculate target count for M1:
-  // - For 54 R&W questions -> 27 M1 + 27 M2
-  // - For 81 R&W questions -> 27 M1 + 54 M2 (27 easy + 27 hard)
-  // - For 44 Math questions -> 22 M1 + 22 M2
-  // - For 87 Math questions -> 29 M1 + 58 M2 (29 easy + 29 hard) or maxPerMod if <= 3*maxPerMod
+  // 2. If autoBalance is false and targetPlacement is 'auto', strictly keep each item's explicit moduleId
+  // (or default to m1Id if not specified) without splitting.
+  if (targetPlacement === 'auto' && !autoBalance) {
+    for (const e of secEntries) {
+      const mod = e.explicitModuleId || m1Id;
+      e.item.moduleId = mod;
+      e.item.variant =
+        mod === m2Id && (e.explicitVariant === 'easy' || e.explicitVariant === 'hard')
+          ? e.explicitVariant
+          : undefined;
+    }
+    return;
+  }
+
+  // 3. Even in 'auto' / 'rw_auto' / 'math_auto', if total questions <= maxPerMod (e.g. <= 22 for Math or <= 27 for R&W),
+  // NEVER split a single-module batch into two halves (like 11 + 10) unless both M1 and M2 were explicitly specified in JSON.
+  if (secEntries.length <= maxPerMod && !hasBothModulesExplicit) {
+    if (hasExplicitM2) {
+      for (const e of secEntries) {
+        e.item.moduleId = m2Id;
+        e.item.variant =
+          e.explicitVariant === 'easy' || e.explicitVariant === 'hard'
+            ? e.explicitVariant
+            : undefined;
+      }
+    } else {
+      for (const e of secEntries) {
+        e.item.moduleId = m1Id;
+        e.item.variant = undefined;
+      }
+    }
+    return;
+  }
+
+  // Case 4: Multi-module batch (> maxPerMod or explicit M1+M2 with auto-balance enabled)
   const total = secEntries.length;
   let targetM1Count: number;
   if (total > maxPerMod * 3) {
@@ -807,6 +1083,8 @@ export function redistributeQuestionsByDifficultyAndPosition(
       outfit: q.outfit,
       passage: q.passage,
       prompt: q.prompt,
+      imageUrl: q.imageUrl,
+      tableData: q.tableData,
       mathEquation: q.mathEquation,
       options: q.options,
       correctAnswer: q.correctAnswer,
@@ -833,6 +1111,41 @@ export function redistributeQuestionsByDifficultyAndPosition(
       number: nextNum,
     };
   });
+}
+
+/**
+ * Consolidates all existing questions of a section ('rw' or 'math') into a single target module
+ * (e.g., all 21 scattered Math questions into 'math_1' numbered 1..21) without splitting.
+ */
+export function consolidateSectionQuestionsToModule(
+  allQuestions: SATQuestion[],
+  section: 'rw' | 'math',
+  targetModuleId: ModuleId,
+  targetVariant?: QuestionVariant
+): SATQuestion[] {
+  const secPrefix = section === 'rw' ? 'rw_' : 'math_';
+  const sectionQuestions = allQuestions
+    .filter((q) => q.moduleId.startsWith(secPrefix))
+    .sort(
+      (a, b) =>
+        MODULE_ORDER.indexOf(a.moduleId) - MODULE_ORDER.indexOf(b.moduleId) ||
+        a.number - b.number
+    );
+
+  if (sectionQuestions.length === 0) return [];
+
+  const cleanVariant: QuestionVariant | undefined =
+    targetModuleId.endsWith('_2') &&
+    (targetVariant === 'easy' || targetVariant === 'hard')
+      ? targetVariant
+      : undefined;
+
+  return sectionQuestions.map((q, idx) => ({
+    ...q,
+    moduleId: targetModuleId,
+    variant: cleanVariant,
+    number: idx + 1,
+  }));
 }
 
 export function parseQuestionImport(
@@ -1042,6 +1355,11 @@ export function parseQuestionImport(
       b: rawB,
       passage: obj.passage ? String(obj.passage) : undefined,
       prompt: obj.prompt !== undefined ? String(obj.prompt) : '',
+      imageUrl: obj.imageUrl ? String(obj.imageUrl) : undefined,
+      tableData:
+        obj.tableData && typeof obj.tableData === 'object'
+          ? (obj.tableData as QuestionTableData)
+          : undefined,
       mathEquation: Array.isArray(obj.mathEquation)
         ? obj.mathEquation.map((x) => String(x))
         : undefined,
@@ -1068,6 +1386,8 @@ export function parseQuestionImport(
         b: candidate.b,
         passage: candidate.passage,
         prompt: candidate.prompt!,
+        imageUrl: candidate.imageUrl,
+        tableData: candidate.tableData,
         mathEquation: candidate.mathEquation,
         options: candidate.options,
         correctAnswer: candidate.correctAnswer!,
@@ -1097,12 +1417,16 @@ export function parseQuestionImport(
     autoBalance
   );
 
-  // Order final items cleanly by module order, variant, difficulty, and position
+  // Order final items by module order, variant, and original position (only sort by difficulty if auto-splitting)
+  const isAutoSplitMode =
+    targetPlacement === 'rw_auto' || targetPlacement === 'math_auto';
   const orderedEntries = [...rwEntries, ...mathEntries].sort(
     (a, b) =>
       MODULE_ORDER.indexOf(a.item.moduleId) - MODULE_ORDER.indexOf(b.item.moduleId) ||
       (a.item.variant || '').localeCompare(b.item.variant || '') ||
-      getDifficultyNumericRank(a.item) - getDifficultyNumericRank(b.item) ||
+      (isAutoSplitMode
+        ? getDifficultyNumericRank(a.item) - getDifficultyNumericRank(b.item)
+        : 0) ||
       a.originalIndex - b.originalIndex
   );
 
@@ -1203,6 +1527,16 @@ function seededShuffle<T>(arr: T[], seedStr: string): T[] {
   return copy;
 }
 
+export function getQuestionsForPracticeTest(
+  allQuestions: SATQuestion[],
+  testId?: string
+): SATQuestion[] {
+  const targetId = testId || DEFAULT_PRACTICE_TEST_ID;
+  return (allQuestions || []).filter(
+    (q) => (q.testId || DEFAULT_PRACTICE_TEST_ID) === targetId
+  );
+}
+
 /**
  * Generates a deterministic test variant for a specific student session based on the questions
  * available in the database (`allQuestions`).
@@ -1211,12 +1545,19 @@ function seededShuffle<T>(arr: T[], seedStr: string): T[] {
  */
 export function getSessionVariantQuestions(
   allQuestions: SATQuestion[],
-  sessionId: string
+  sessionId: string,
+  testId?: string
 ): SATQuestion[] {
   if (!allQuestions || allQuestions.length === 0) return [];
 
+  const testSpecific = getQuestionsForPracticeTest(allQuestions, testId);
+  const sourceQuestions =
+    testSpecific.length > 0
+      ? testSpecific
+      : getQuestionsForPracticeTest(allQuestions, DEFAULT_PRACTICE_TEST_ID);
+
   const uniqueMap = new Map<string, SATQuestion>();
-  for (const q of allQuestions) {
+  for (const q of sourceQuestions) {
     if (q && q.id) {
       uniqueMap.set(q.id, q);
     }

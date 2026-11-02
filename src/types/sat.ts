@@ -39,18 +39,53 @@ export interface ModuleConfig {
   directions: string;
 }
 
+export interface QuestionTableData {
+  title?: string;
+  headers: string[];
+  rows: string[][];
+}
+
 export interface QuestionOption {
   id: 'A' | 'B' | 'C' | 'D';
   text: string;
+  tableData?: QuestionTableData;
 }
+
+export const DEFAULT_PRACTICE_TEST_ID = 'practice_test_1';
+
+export interface PracticeTest {
+  id: string;
+  title: string;
+  description: string;
+  status: 'active' | 'draft';
+  rwDurationMinutes: number;
+  mathDurationMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const DEFAULT_PRACTICE_TEST: PracticeTest = {
+  id: DEFAULT_PRACTICE_TEST_ID,
+  title: 'Bluebook Digital SAT Practice Test #1',
+  description:
+    'Section 1: Reading & Writing (Module 1 & Adaptive Module 2 — 64 daqiqa, 54 savol) · Section 2: Math (Module 1 & Adaptive Module 2 — 70 daqiqa, 44 savol).',
+  status: 'active',
+  rwDurationMinutes: 32,
+  mathDurationMinutes: 35,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-01T00:00:00.000Z',
+};
 
 export interface SATQuestion {
   id: string;
+  testId?: string; // Qaysi Practice Testga tegishli ekanligi (bo'lmasa 'practice_test_1')
   moduleId: ModuleId;
   number: number;
   type: QuestionType;
   passage?: string;
   prompt: string;
+  imageUrl?: string; // Savolga biriktirilgan rasm (Data URI yoki URL)
+  tableData?: QuestionTableData; // Savolga biriktirilgan jadval
   mathEquation?: string[];
   options?: QuestionOption[];
   correctAnswer: string;
@@ -165,6 +200,7 @@ export const DEFAULT_SCORING_CONFIG: ScoringConfig = {
 
 export interface StudentSession {
   id: string;
+  testId?: string; // Qaysi Practice Testni topshirayotgani (bo'lmasa 'practice_test_1')
   fullName: string;
   email?: string;
   password: string;

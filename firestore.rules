@@ -38,6 +38,7 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'id',
+        'testId',
         'fullName',
         'email',
         'password',
@@ -60,6 +61,7 @@ service cloud.firestore {
         'result'
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+      (!('testId' in data) || (data.testId is string && data.testId.size() >= 1 && data.testId.size() <= 128)) &&
       data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120 &&
       (!('email' in data) || (data.email is string && data.email.size() <= 160)) &&
       data.password is string && data.password.size() >= 1 && data.password.size() <= 64 &&
@@ -93,11 +95,14 @@ service cloud.firestore {
       ]) &&
       data.keys().hasOnly([
         'id',
+        'testId',
         'moduleId',
         'number',
         'type',
         'passage',
         'prompt',
+        'imageUrl',
+        'tableData',
         'mathEquation',
         'options',
         'correctAnswer',
@@ -114,12 +119,15 @@ service cloud.firestore {
         'calibratedAt'
       ]) &&
       data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+      (!('testId' in data) || (data.testId is string && data.testId.size() >= 1 && data.testId.size() <= 128)) &&
       data.moduleId is string && data.moduleId.size() <= 16 && data.moduleId in ['rw_1', 'rw_2', 'math_1', 'math_2'] &&
       data.number is number && data.number >= 1 && data.number <= 10000 &&
       data.type is string && data.type.size() <= 16 && data.type in ['mcq', 'spr'] &&
       data.prompt is string && data.prompt.size() >= 1 && data.prompt.size() <= 4000 &&
       data.correctAnswer is string && data.correctAnswer.size() >= 1 && data.correctAnswer.size() <= 64 &&
       (!('passage' in data) || (data.passage is string && data.passage.size() <= 8000)) &&
+      (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 800000)) &&
+      (!('tableData' in data) || (data.tableData is map)) &&
       (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 4000)) &&
       (!('domain' in data) || (data.domain is string && data.domain.size() <= 120)) &&
       (!('skill' in data) || (data.skill is string && data.skill.size() <= 120)) &&
@@ -133,6 +141,37 @@ service cloud.firestore {
       (!('calibratedAt' in data) || (data.calibratedAt is number && data.calibratedAt >= 0)) &&
       (!('options' in data) || (data.options is list && data.options.size() <= 8)) &&
       (!('mathEquation' in data) || (data.mathEquation is list && data.mathEquation.size() <= 10));
+    }
+
+    function isValidPracticeTest(data) {
+      return data.keys().hasAll([
+        'id',
+        'title',
+        'description',
+        'status',
+        'rwDurationMinutes',
+        'mathDurationMinutes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'title',
+        'description',
+        'status',
+        'rwDurationMinutes',
+        'mathDurationMinutes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+      data.description is string && data.description.size() <= 1000 &&
+      data.status is string && data.status in ['active', 'draft'] &&
+      data.rwDurationMinutes is number && data.rwDurationMinutes >= 5 && data.rwDurationMinutes <= 180 &&
+      data.mathDurationMinutes is number && data.mathDurationMinutes >= 5 && data.mathDurationMinutes <= 180 &&
+      data.createdAt is string && data.createdAt.size() <= 64 &&
+      data.updatedAt is string && data.updatedAt.size() <= 64;
     }
 
     function isValidScoringConfig(data) {
@@ -180,6 +219,14 @@ service cloud.firestore {
       allow get: if isValidId(docId);
       allow create: if isValidId(docId) && isValidScoringConfig(incoming());
       allow update: if isValidId(docId) && isValidScoringConfig(incoming());
+    }
+
+    match /practice_tests/{testId} {
+      allow get: if isValidId(testId);
+      allow list: if request.query.limit <= 100 && resource.data.status in ['active', 'draft'];
+      allow create: if isValidId(testId) && isValidPracticeTest(incoming()) && incoming().id == testId;
+      allow update: if isValidId(testId) && isValidPracticeTest(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(testId);
     }
 
     match /sessions/{sessionId} {

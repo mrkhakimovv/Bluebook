@@ -11,6 +11,11 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "testId": {
+          "type": "string",
+          "description": "Identifier of the PracticeTest associated with this session",
+          "maxLength": 128
+        },
         "fullName": {
           "type": "string",
           "description": "Student full name",
@@ -78,6 +83,11 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "testId": {
+          "type": "string",
+          "description": "PracticeTest ID that this question belongs to",
+          "maxLength": 128
+        },
         "moduleId": {
           "type": "string",
           "enum": ["rw_1", "rw_2", "math_1", "math_2"],
@@ -95,6 +105,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4000
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional image URL or base64 data URI attached to the question",
+          "maxLength": 800000
+        },
+        "tableData": {
+          "type": "object",
+          "description": "Optional structured table attached to the question"
         },
         "correctAnswer": {
           "type": "string",
@@ -136,6 +155,56 @@
       },
       "required": ["id", "moduleId", "number", "type", "prompt", "correctAnswer"]
     },
+    "PracticeTest": {
+      "title": "PracticeTest",
+      "description": "Represents a full-length adaptive Digital SAT Practice Test managed by Admin.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "draft"],
+          "maxLength": 16
+        },
+        "rwDurationMinutes": {
+          "type": "number"
+        },
+        "mathDurationMinutes": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "status",
+        "rwDurationMinutes",
+        "mathDurationMinutes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "ScoringConfig": {
       "title": "ScoringConfig",
       "description": "Rasch IRT scaling and Stage 2 routing parameters.",
@@ -172,6 +241,10 @@
     "/questions/{questionId}": {
       "schema": { "$ref": "#/entities/SATQuestion" },
       "description": "Stores SAT exam questions and Rasch IRT item parameters"
+    },
+    "/practice_tests/{testId}": {
+      "schema": { "$ref": "#/entities/PracticeTest" },
+      "description": "Stores full-length Practice Tests created and managed by Admin"
     },
     "/config/{docId}": {
       "schema": { "$ref": "#/entities/ScoringConfig" },

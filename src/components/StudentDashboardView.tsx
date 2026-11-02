@@ -35,6 +35,9 @@ import {
   MODULE_CONFIGS,
   MODULE_ORDER,
   ScoringConfig,
+  PracticeTest,
+  DEFAULT_PRACTICE_TEST,
+  DEFAULT_PRACTICE_TEST_ID,
 } from '../types/sat';
 import { isAnswerCorrect } from '../data/defaultQuestions';
 import { scoreSession, getModuleQuestionsForSession, computeStage1Routing } from '../lib/scoring/rasch';
@@ -45,7 +48,9 @@ interface StudentDashboardViewProps {
   session: StudentSession;
   allSessions: StudentSession[];
   questions: SATQuestion[];
+  practiceTests?: PracticeTest[];
   scoringConfig: ScoringConfig;
+  onSelectPracticeTest?: (testId: string) => Promise<void>;
   onStartExam: () => void;
   onViewResults: () => void;
   onRestartExam: () => Promise<void>;
@@ -69,7 +74,9 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
   session,
   allSessions,
   questions,
+  practiceTests = [DEFAULT_PRACTICE_TEST],
   scoringConfig,
+  onSelectPracticeTest,
   onStartExam,
   onViewResults,
   onRestartExam,
@@ -280,7 +287,27 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
     );
   };
 
-  const handleLaunchExam = () => {
+  const effectiveTests =
+    practiceTests && practiceTests.length > 0
+      ? practiceTests
+      : [DEFAULT_PRACTICE_TEST];
+  const currentTestObj =
+    effectiveTests.find(
+      (t) => t.id === (session.testId || DEFAULT_PRACTICE_TEST_ID)
+    ) || effectiveTests[0];
+  const hasAnyActiveTest = effectiveTests.some((t) => t.status === 'active');
+
+  const handleLaunchExam = async () => {
+    if (currentTestObj && currentTestObj.status !== 'active') {
+      const firstActive = effectiveTests.find((t) => t.status === 'active');
+      if (!firstActive) {
+        setActiveTab('practice_tests');
+        return;
+      }
+      if (onSelectPracticeTest) {
+        await onSelectPracticeTest(firstActive.id);
+      }
+    }
     const orientationApi = (window.screen as Screen & {
       orientation?: { lock?: (type: string) => Promise<void> };
     })?.orientation;
@@ -1004,108 +1031,213 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold text-slate-900">
-                  Practice Tests
+                  Practice Tests ({effectiveTests.length})
                 </h1>
                 <p className="text-xs text-slate-500 mt-1">
                   Official Bluebook-style adaptive full-length Digital SAT practice exams.
                 </p>
               </div>
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Faol (Ochiq): {effectiveTests.filter((t) => t.status === 'active').length}
+                </span>
+              </div>
             </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-5">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-1.5">
-                  <div className="text-xs font-bold uppercase tracking-wider text-[#2563eb]">
-                    Full-Length Adaptive Test
-                  </div>
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Bluebook Digital SAT Practice Test #1
-                  </h2>
-                  <p className="text-xs text-slate-600 max-w-2xl">
-                    Section 1: Reading & Writing (Module 1 & Adaptive Module 2 — 64 daqiqa, 54 savol) · Section 2: Math (Module 1 & Adaptive Module 2 — 70 daqiqa, 44 savol).
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-600">
-                    Status:{' '}
-                    <strong className="text-slate-900">
-                      {session.status === 'completed'
-                        ? 'Yakunlangan'
-                        : stats.answeredCount > 0
-                        ? `Jarayonda (${MODULE_CONFIGS[session.currentModule]?.shortTitle})`
-                        : 'Boshlanmagan'}
-                    </strong>
-                  </span>
-                </div>
+            {!hasAnyActiveTest && (
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Hozirda administrator tomonidan faollashtirilgan (ochiq) Practice Test mavjud emas. Test ochilishini kuting.
+                </span>
               </div>
+            )}
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-slate-100">
-                <div>
-                  <div className="text-[11px] text-slate-500">Belgilangan savollar</div>
-                  <div className="text-base font-bold text-slate-900 tabular-nums">
-                    {stats.answeredCount} / {session.score.totalQuestions}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500">Reading & Writing</div>
-                  <div className="text-base font-bold text-slate-900 tabular-nums">
-                    {session.status === 'completed' ? stats.raschResult.rw.score : '200–800'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500">Mathematics</div>
-                  <div className="text-base font-bold text-slate-900 tabular-nums">
-                    {session.status === 'completed' ? stats.raschResult.math.score : '200–800'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] text-slate-500">Total Score</div>
-                  <div className="text-base font-bold text-[#2563eb] tabular-nums">
-                    {session.status === 'completed' ? stats.raschResult.total : '400–1600'}
-                  </div>
-                </div>
-              </div>
+            <div className="space-y-4">
+              {effectiveTests.map((test) => {
+                const isCurrentTest =
+                  (session.testId || DEFAULT_PRACTICE_TEST_ID) === test.id;
+                const isTestActive = test.status === 'active';
 
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                {session.status !== 'completed' ? (
-                  <button
-                    type="button"
-                    onClick={handleLaunchExam}
-                    className="px-5 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                return (
+                  <div
+                    key={test.id}
+                    className={`bg-white border rounded-2xl p-6 space-y-5 transition-all ${
+                      isCurrentTest
+                        ? 'border-[#2563eb] shadow-xs'
+                        : isTestActive
+                        ? 'border-slate-200 hover:border-slate-300'
+                        : 'border-slate-200 bg-slate-50/60 opacity-85'
+                    }`}
                   >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>
-                      {stats.answeredCount > 0
-                        ? 'Imtihonni Davom Ettirish'
-                        : 'Imtihonni Boshlash'}
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onViewResults}
-                    className="px-5 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
-                  >
-                    <Award className="w-4 h-4" />
-                    <span>Batafsil Natijani Ko‘rish</span>
-                  </button>
-                )}
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-[#2563eb]">
+                            Full-Length Adaptive Test
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase ${
+                              isTestActive
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {isTestActive ? 'Faol (Ochiq)' : 'Nofaol (Yopiq)'}
+                          </span>
+                          {isCurrentTest && (
+                            <span className="px-2 py-0.5 rounded-full bg-blue-50 text-[#2563eb] text-[10px] font-bold border border-blue-200">
+                              Tanlangan test
+                            </span>
+                          )}
+                        </div>
+                        <h2 className="text-lg font-bold text-slate-900">
+                          {test.title}
+                        </h2>
+                        <p className="text-xs text-slate-600 max-w-2xl">
+                          {test.description}
+                        </p>
+                      </div>
 
-                {(stats.answeredCount > 0 || session.status === 'completed') && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await onRestartExam();
-                      handleLaunchExam();
-                    }}
-                    className="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 cursor-pointer"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Yangidan Boshlash</span>
-                  </button>
-                )}
-              </div>
+                      {isCurrentTest && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-slate-600">
+                            Status:{' '}
+                            <strong className="text-slate-900">
+                              {session.status === 'completed'
+                                ? 'Yakunlangan'
+                                : stats.answeredCount > 0
+                                ? `Jarayonda (${MODULE_CONFIGS[session.currentModule]?.shortTitle})`
+                                : 'Boshlanmagan'}
+                            </strong>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {isCurrentTest && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-slate-100">
+                        <div>
+                          <div className="text-[11px] text-slate-500">
+                            Belgilangan savollar
+                          </div>
+                          <div className="text-base font-bold text-slate-900 tabular-nums">
+                            {stats.answeredCount} / {session.score.totalQuestions}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">
+                            Reading & Writing
+                          </div>
+                          <div className="text-base font-bold text-slate-900 tabular-nums">
+                            {session.status === 'completed'
+                              ? stats.raschResult.rw.score
+                              : '200–800'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">
+                            Mathematics
+                          </div>
+                          <div className="text-base font-bold text-slate-900 tabular-nums">
+                            {session.status === 'completed'
+                              ? stats.raschResult.math.score
+                              : '200–800'}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[11px] text-slate-500">Total Score</div>
+                          <div className="text-base font-bold text-[#2563eb] tabular-nums">
+                            {session.status === 'completed'
+                              ? stats.raschResult.total
+                              : '400–1600'}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-3 pt-2">
+                      {!isTestActive ? (
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span className="px-4 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold flex items-center gap-2">
+                            <XCircle className="w-4 h-4 text-amber-600" />
+                            <span>Ushbu test hozirda administrator tomonidan yopilgan (Nofaol)</span>
+                          </span>
+                          {isCurrentTest && session.status === 'completed' && (
+                            <button
+                              type="button"
+                              onClick={onViewResults}
+                              className="px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 cursor-pointer"
+                            >
+                              <Award className="w-4 h-4" />
+                              <span>Avvalgi Natijani Ko‘rish</span>
+                            </button>
+                          )}
+                        </div>
+                      ) : isCurrentTest ? (
+                        <>
+                          {session.status !== 'completed' ? (
+                            <button
+                              type="button"
+                              onClick={handleLaunchExam}
+                              className="px-5 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                            >
+                              <Play className="w-4 h-4 fill-current" />
+                              <span>
+                                {stats.answeredCount > 0
+                                  ? 'Imtihonni Davom Ettirish'
+                                  : 'Imtihonni Boshlash'}
+                              </span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={onViewResults}
+                              className="px-5 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                            >
+                              <Award className="w-4 h-4" />
+                              <span>Batafsil Natijani Ko‘rish</span>
+                            </button>
+                          )}
+
+                          {(stats.answeredCount > 0 ||
+                            session.status === 'completed') && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await onRestartExam();
+                                handleLaunchExam();
+                              }}
+                              className="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 cursor-pointer"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Yangidan Boshlash</span>
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (onSelectPracticeTest) {
+                              await onSelectPracticeTest(test.id);
+                            }
+                            const orientationApi = (window.screen as Screen & {
+                              orientation?: { lock?: (type: string) => Promise<void> };
+                            })?.orientation;
+                            orientationApi?.lock?.('landscape')?.catch(() => {});
+                            onStartExam();
+                          }}
+                          className="px-5 py-2.5 rounded-xl bg-[#2563eb] hover:bg-[#1d4ed8] text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                        >
+                          <Play className="w-4 h-4 fill-current" />
+                          <span>Ushbu Practice Testni Boshlash</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1197,6 +1329,56 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                         </span>
                       </div>
 
+                      {q.tableData && q.tableData.headers.length > 0 && (
+                        <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs">
+                          {q.tableData.title && (
+                            <div className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif">
+                              {q.tableData.title}
+                            </div>
+                          )}
+                          <table className="w-full border-collapse text-left text-xs sat-serif">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-300">
+                                {q.tableData.headers.map((h, hIdx) => (
+                                  <th
+                                    key={hIdx}
+                                    className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                    dangerouslySetInnerHTML={{
+                                      __html: renderSATTextWithMath(h || `Ustun ${hIdx + 1}`, true),
+                                    }}
+                                  />
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {q.tableData.rows.map((row, rIdx) => (
+                                <tr key={rIdx} className="hover:bg-slate-50/60">
+                                  {q.tableData!.headers.map((_, cIdx) => (
+                                    <td
+                                      key={cIdx}
+                                      className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(row[cIdx] || '', true),
+                                      }}
+                                    />
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {q.imageUrl && (
+                        <div className="my-2 flex justify-center">
+                          <img
+                            src={q.imageUrl}
+                            alt={`Savol #${q.number} tasviri`}
+                            className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                          />
+                        </div>
+                      )}
+
                       {q.passage && (
                         <div
                           className="text-xs text-slate-700 bg-slate-50 p-3.5 rounded-xl leading-relaxed sat-serif"
@@ -1218,18 +1400,73 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                           {q.options.map((opt) => (
                             <div
                               key={opt.id}
-                              className={`p-2.5 rounded-xl border text-xs flex items-start gap-2 ${
+                              className={`p-2.5 rounded-xl border text-xs flex items-start gap-2 sat-serif ${
                                 revealed && opt.id === q.correctAnswer
                                   ? 'border-emerald-500 bg-emerald-50/70 text-emerald-950 font-semibold'
                                   : 'border-slate-200 text-slate-700'
                               }`}
                             >
-                              <span className="font-bold">{opt.id}.</span>
-                              <span
-                                dangerouslySetInnerHTML={{
-                                  __html: renderSATTextWithMath(opt.text),
-                                }}
-                              />
+                              <span className="font-sans font-bold">{opt.id}.</span>
+                              <div className="flex-1 min-w-0 space-y-1.5">
+                                {opt.text && opt.text.trim().length > 0 && (
+                                  <div
+                                    dangerouslySetInnerHTML={{
+                                      __html: renderSATTextWithMath(
+                                        opt.text,
+                                        q.moduleId.startsWith('math_')
+                                      ),
+                                    }}
+                                  />
+                                )}
+                                {opt.tableData && opt.tableData.headers.length > 0 && (
+                                  <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white">
+                                    {opt.tableData.title && (
+                                      <div
+                                        className="bg-slate-100 border-b border-slate-300 px-2.5 py-1 text-[11px] font-bold text-slate-900 text-center"
+                                        dangerouslySetInnerHTML={{
+                                          __html: renderSATTextWithMath(opt.tableData.title, true),
+                                        }}
+                                      />
+                                    )}
+                                    <table className="w-full border-collapse text-center text-xs sat-serif">
+                                      <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-300">
+                                          {opt.tableData.headers.map((h, hIdx) => (
+                                            <th
+                                              key={hIdx}
+                                              className="px-2.5 py-1 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                              dangerouslySetInnerHTML={{
+                                                __html: renderSATTextWithMath(
+                                                  h || `Ustun ${hIdx + 1}`,
+                                                  true
+                                                ),
+                                              }}
+                                            />
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-200">
+                                        {opt.tableData.rows.map((row, rIdx) => (
+                                          <tr key={rIdx}>
+                                            {opt.tableData!.headers.map((_, cIdx) => (
+                                              <td
+                                                key={cIdx}
+                                                className="px-2.5 py-1 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                                dangerouslySetInnerHTML={{
+                                                  __html: renderSATTextWithMath(
+                                                    row[cIdx] || '',
+                                                    true
+                                                  ),
+                                                }}
+                                              />
+                                            ))}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1306,6 +1543,56 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                         </span>
                       </div>
                     </div>
+
+                    {q.tableData && q.tableData.headers.length > 0 && (
+                      <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs">
+                        {q.tableData.title && (
+                          <div className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif">
+                            {q.tableData.title}
+                          </div>
+                        )}
+                        <table className="w-full border-collapse text-left text-xs sat-serif">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-300">
+                              {q.tableData.headers.map((h, hIdx) => (
+                                <th
+                                  key={hIdx}
+                                  className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                  dangerouslySetInnerHTML={{
+                                    __html: renderSATTextWithMath(h || `Ustun ${hIdx + 1}`, true),
+                                  }}
+                                />
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {q.tableData.rows.map((row, rIdx) => (
+                              <tr key={rIdx} className="hover:bg-slate-50/60">
+                                {q.tableData!.headers.map((_, cIdx) => (
+                                  <td
+                                    key={cIdx}
+                                    className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                    dangerouslySetInnerHTML={{
+                                      __html: renderSATTextWithMath(row[cIdx] || '', true),
+                                    }}
+                                  />
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {q.imageUrl && (
+                      <div className="my-2 flex justify-center">
+                        <img
+                          src={q.imageUrl}
+                          alt={`Savol #${q.number} tasviri`}
+                          className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                        />
+                      </div>
+                    )}
 
                     {q.passage && (
                       <div
