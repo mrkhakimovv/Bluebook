@@ -1296,6 +1296,7 @@ export default function App() {
           session={activeSession}
           allSessions={sessions}
           questions={activeVariantQuestions}
+          allQuestions={questions}
           practiceTests={practiceTests}
           scoringConfig={scoringConfig}
           onSelectPracticeTest={handleSelectStudentPracticeTest}

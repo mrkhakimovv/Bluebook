@@ -349,6 +349,7 @@ export function parseTextToTableData(rawText: string): {
   const lines = (rawText || '').split(/\r?\n/);
   const tableLines: string[][] = [];
   const otherLines: string[] = [];
+  let detectedTitle: string | undefined;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -360,22 +361,42 @@ export function parseTextToTableData(rawText: string): {
     if (/^\|?[\s\-:|]+\|[\s\-:|]+$/.test(trimmed)) {
       continue;
     }
+    let parts: string[] | null = null;
     if (trimmed.includes('|')) {
-      const parts = trimmed
+      const candidate = trimmed
         .replace(/^\|/, '')
         .replace(/\|$/, '')
         .split('|')
         .map((c) => c.trim());
-      if (parts.length >= 2) {
-        tableLines.push(parts);
-        continue;
+      if (candidate.length >= 2) {
+        parts = candidate;
       }
     } else if (trimmed.includes('\t')) {
-      const parts = trimmed.split('\t').map((c) => c.trim());
-      if (parts.length >= 2) {
-        tableLines.push(parts);
-        continue;
+      const candidate = trimmed.split('\t').map((c) => c.trim());
+      if (candidate.length >= 2) {
+        parts = candidate;
       }
+    }
+
+    if (parts) {
+      // If this is the very first table row and the immediately preceding line in otherLines is a short heading, capture it as table title
+      if (tableLines.length === 0 && !detectedTitle && otherLines.length > 0) {
+        const lastIdx = otherLines.length - 1;
+        const prevCandidate = otherLines[lastIdx].trim();
+        if (
+          prevCandidate.length > 0 &&
+          prevCandidate.length <= 75 &&
+          !/[.?!:;]$/.test(prevCandidate) &&
+          !/^(?:which|what|based on|according to|in the|if |for |how |why |when |where |the following|a student|one |while |although )/i.test(
+            prevCandidate
+          )
+        ) {
+          detectedTitle = prevCandidate.replace(/^(?:sarlavha|title)\s*[:\-]\s*/i, '').trim();
+          otherLines.pop();
+        }
+      }
+      tableLines.push(parts);
+      continue;
     }
     otherLines.push(line);
   }
@@ -404,10 +425,11 @@ export function parseTextToTableData(rawText: string): {
 
   return {
     tableData: {
+      ...(detectedTitle ? { title: detectedTitle } : {}),
       headers,
       rows,
     },
-    remainingText: otherLines.join('\n').trim(),
+    remainingText: otherLines.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
   };
 }
 

@@ -41,13 +41,17 @@ import {
 } from '../types/sat';
 import { isAnswerCorrect } from '../data/defaultQuestions';
 import { scoreSession, getModuleQuestionsForSession, computeStage1Routing } from '../lib/scoring/rasch';
-import { renderSATTextWithMath } from '../utils/mathRenderer';
+import {
+  renderSATTextWithMath,
+  splitQuestionPromptForMedia,
+} from '../utils/mathRenderer';
 import { loadPlatformContent } from '../data/platformContent';
 
 interface StudentDashboardViewProps {
   session: StudentSession;
   allSessions: StudentSession[];
   questions: SATQuestion[];
+  allQuestions?: SATQuestion[];
   practiceTests?: PracticeTest[];
   scoringConfig: ScoringConfig;
   onSelectPracticeTest?: (testId: string) => Promise<void>;
@@ -74,6 +78,7 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
   session,
   allSessions,
   questions,
+  allQuestions,
   practiceTests = [DEFAULT_PRACTICE_TEST],
   scoringConfig,
   onSelectPracticeTest,
@@ -138,7 +143,7 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
     }
 
     const accuracy = answeredCount > 0 ? Math.round((correctCount / answeredCount) * 100) : 0;
-    const totalPoints = correctCount * 175;
+    const totalPoints = correctCount;
 
     // Calculate total study time spent from moduleTimeRemaining
     const totalDefaultSeconds =
@@ -194,69 +199,97 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
     }));
   }, [session.updatedAt, stats.answeredCount]);
 
-  // Leaderboard entries combining real sessions and benchmark students
+  // Leaderboard entries: 1 correct answer = 1 point
   const leaderboard = useMemo(() => {
+    const qPool = allQuestions && allQuestions.length > 0 ? allQuestions : questions;
+    const qLookup = new Map<string, SATQuestion>();
+    for (const q of qPool) {
+      qLookup.set(q.id, q);
+    }
+
+    const nowMs = Date.now();
+    const periodWindowMs =
+      leaderboardPeriod === 'weekly'
+        ? 7 * 24 * 60 * 60 * 1000
+        : 30 * 24 * 60 * 60 * 1000;
+
+    const filteredSessions = allSessions.filter((s) => {
+      const ts = new Date(s.updatedAt || s.startedAt || 0).getTime();
+      if (!ts) return true;
+      return nowMs - ts <= periodWindowMs;
+    });
+    const sourceSessions =
+      filteredSessions.length >= 3 ? filteredSessions : allSessions;
+
     const entries: {
       id: string;
       name: string;
       points: number;
+      answeredCount: number;
+      scaledScore: number;
       initial: string;
       color: string;
       isCurrentUser?: boolean;
-    }[] = [
-      {
-        id: 'bench_1',
-        name: 'Nasrin Hridy',
-        points: leaderboardPeriod === 'weekly' ? 12070 : 28450,
-        initial: 'N',
-        color: 'bg-[#ea580c]',
-      },
-      {
-        id: 'bench_2',
-        name: 'Aman Begdullaev',
-        points: leaderboardPeriod === 'weekly' ? 10870 : 24120,
-        initial: 'A',
-        color: 'bg-[#d97706]',
-      },
-      {
-        id: 'bench_3',
-        name: 'Ibrohimjon Anvarjonov',
-        points: leaderboardPeriod === 'weekly' ? 4420 : 11900,
-        initial: 'I',
-        color: 'bg-[#2563eb]',
-      },
-    ];
+    }[] = [];
 
-    const colors = ['bg-[#2563eb]', 'bg-[#059669]', 'bg-[#7c3aed]', 'bg-[#db2777]'];
-    allSessions.forEach((s, i) => {
-      const answered = Object.keys(s.answers || {}).length;
-      const pts = Math.max(
-        s.score?.rwRaw || 0,
-        answered
-      ) * 175 + (s.status === 'completed' ? s.score?.total || 0 : 0);
+    const colors = ['bg-[#2563eb]', 'bg-[#059669]', 'bg-[#7c3aed]', 'bg-[#db2777]', 'bg-[#ea580c]'];
+    sourceSessions.forEach((s, i) => {
+      let correctByLookup = 0;
+      let answeredCount = 0;
+      for (const [qId, ans] of Object.entries(s.answers || {})) {
+        if (ans === undefined || String(ans).trim() === '') continue;
+        answeredCount += 1;
+        const qObj = qLookup.get(qId);
+        if (qObj && isAnswerCorrect(qObj, ans)) {
+          correctByLookup += 1;
+        }
+      }
+
+      const fromScore = (s.score?.rwRaw || 0) + (s.score?.mathRaw || 0);
+      const fromResult =
+        (s.result?.rw?.rawScored || 0) + (s.result?.math?.rawScored || 0);
+      const pts = Math.max(correctByLookup, fromScore, fromResult);
+      const scaledScore = s.result?.total || s.score?.total || 0;
 
       const existingIdx = entries.findIndex(
-        (e) => e.name.toLowerCase() === s.fullName.toLowerCase()
+        (e) => e.name.trim().toLowerCase() === s.fullName.trim().toLowerCase()
       );
       const entry = {
         id: s.id,
         name: s.fullName,
         points: pts,
+        answeredCount,
+        scaledScore,
         initial: (s.fullName.trim()[0] || 'S').toUpperCase(),
         color: colors[i % colors.length],
-        isCurrentUser: s.id === session.id,
+        isCurrentUser:
+          s.id === session.id ||
+          s.fullName.trim().toLowerCase() === session.fullName.trim().toLowerCase(),
       };
       if (existingIdx >= 0) {
-        if (pts > entries[existingIdx].points) {
-          entries[existingIdx] = entry;
+        if (
+          pts > entries[existingIdx].points ||
+          (pts === entries[existingIdx].points &&
+            scaledScore > entries[existingIdx].scaledScore)
+        ) {
+          entries[existingIdx] = {
+            ...entry,
+            isCurrentUser: entries[existingIdx].isCurrentUser || entry.isCurrentUser,
+          };
         }
       } else {
         entries.push(entry);
       }
     });
 
-    return entries.sort((a, b) => b.points - a.points);
-  }, [allSessions, session.id, leaderboardPeriod]);
+    return entries.sort(
+      (a, b) =>
+        b.points - a.points ||
+        b.scaledScore - a.scaledScore ||
+        b.answeredCount - a.answeredCount ||
+        a.name.localeCompare(b.name)
+    );
+  }, [allSessions, allQuestions, questions, session.id, session.fullName, leaderboardPeriod]);
 
   const topThree = leaderboard.slice(0, 3);
 
@@ -1329,56 +1362,6 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                         </span>
                       </div>
 
-                      {q.tableData && q.tableData.headers.length > 0 && (
-                        <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs">
-                          {q.tableData.title && (
-                            <div className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif">
-                              {q.tableData.title}
-                            </div>
-                          )}
-                          <table className="w-full border-collapse text-left text-xs sat-serif">
-                            <thead>
-                              <tr className="bg-slate-50 border-b border-slate-300">
-                                {q.tableData.headers.map((h, hIdx) => (
-                                  <th
-                                    key={hIdx}
-                                    className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
-                                    dangerouslySetInnerHTML={{
-                                      __html: renderSATTextWithMath(h || `Ustun ${hIdx + 1}`, true),
-                                    }}
-                                  />
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200">
-                              {q.tableData.rows.map((row, rIdx) => (
-                                <tr key={rIdx} className="hover:bg-slate-50/60">
-                                  {q.tableData!.headers.map((_, cIdx) => (
-                                    <td
-                                      key={cIdx}
-                                      className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
-                                      dangerouslySetInnerHTML={{
-                                        __html: renderSATTextWithMath(row[cIdx] || '', true),
-                                      }}
-                                    />
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {q.imageUrl && (
-                        <div className="my-2 flex justify-center">
-                          <img
-                            src={q.imageUrl}
-                            alt={`Savol #${q.number} tasviri`}
-                            className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
-                          />
-                        </div>
-                      )}
-
                       {q.passage && (
                         <div
                           className="text-xs text-slate-700 bg-slate-50 p-3.5 rounded-xl leading-relaxed sat-serif"
@@ -1388,12 +1371,100 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                         />
                       )}
 
-                      <div
-                        className="text-sm font-medium text-slate-900 sat-serif"
-                        dangerouslySetInnerHTML={{
-                          __html: renderSATTextWithMath(q.prompt),
-                        }}
-                      />
+                      {(() => {
+                        const hasAttachedMedia = Boolean(
+                          (q.tableData && q.tableData.headers.length > 0) ||
+                            (q.imageUrl && q.imageUrl.trim())
+                        );
+                        const { leadingHeading, bodyPrompt } =
+                          splitQuestionPromptForMedia(
+                            q.prompt,
+                            hasAttachedMedia,
+                            q.tableData?.title
+                          );
+
+                        return (
+                          <>
+                            {leadingHeading && (
+                              <div
+                                className="text-sm font-bold text-slate-900 sat-serif"
+                                dangerouslySetInnerHTML={{
+                                  __html: renderSATTextWithMath(leadingHeading),
+                                }}
+                              />
+                            )}
+
+                            {q.tableData && q.tableData.headers.length > 0 && (
+                              <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs max-w-2xl">
+                                {q.tableData.title && (
+                                  <div
+                                    className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif"
+                                    dangerouslySetInnerHTML={{
+                                      __html: renderSATTextWithMath(
+                                        q.tableData.title,
+                                        true
+                                      ),
+                                    }}
+                                  />
+                                )}
+                                <table className="w-full border-collapse text-left text-xs sat-serif">
+                                  <thead>
+                                    <tr className="bg-slate-50 border-b border-slate-300">
+                                      {q.tableData.headers.map((h, hIdx) => (
+                                        <th
+                                          key={hIdx}
+                                          className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                          dangerouslySetInnerHTML={{
+                                            __html: renderSATTextWithMath(
+                                              h || `Ustun ${hIdx + 1}`,
+                                              true
+                                            ),
+                                          }}
+                                        />
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-200">
+                                    {q.tableData.rows.map((row, rIdx) => (
+                                      <tr key={rIdx} className="hover:bg-slate-50/60">
+                                        {q.tableData!.headers.map((_, cIdx) => (
+                                          <td
+                                            key={cIdx}
+                                            className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                            dangerouslySetInnerHTML={{
+                                              __html: renderSATTextWithMath(
+                                                row[cIdx] || '',
+                                                true
+                                              ),
+                                            }}
+                                          />
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            {q.imageUrl && (
+                              <div className="my-2 flex justify-center">
+                                <img
+                                  src={q.imageUrl}
+                                  alt={`Savol #${q.number} tasviri`}
+                                  className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                                />
+                              </div>
+                            )}
+
+                            <div
+                              className="text-sm font-medium text-slate-900 sat-serif whitespace-pre-line"
+                              dangerouslySetInnerHTML={{
+                                __html: renderSATTextWithMath(bodyPrompt),
+                              }}
+                            />
+                          </>
+                        );
+                      })()}
 
                       {q.options && q.options.length > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
@@ -1544,56 +1615,6 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                       </div>
                     </div>
 
-                    {q.tableData && q.tableData.headers.length > 0 && (
-                      <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs">
-                        {q.tableData.title && (
-                          <div className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif">
-                            {q.tableData.title}
-                          </div>
-                        )}
-                        <table className="w-full border-collapse text-left text-xs sat-serif">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-300">
-                              {q.tableData.headers.map((h, hIdx) => (
-                                <th
-                                  key={hIdx}
-                                  className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
-                                  dangerouslySetInnerHTML={{
-                                    __html: renderSATTextWithMath(h || `Ustun ${hIdx + 1}`, true),
-                                  }}
-                                />
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-200">
-                            {q.tableData.rows.map((row, rIdx) => (
-                              <tr key={rIdx} className="hover:bg-slate-50/60">
-                                {q.tableData!.headers.map((_, cIdx) => (
-                                  <td
-                                    key={cIdx}
-                                    className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
-                                    dangerouslySetInnerHTML={{
-                                      __html: renderSATTextWithMath(row[cIdx] || '', true),
-                                    }}
-                                  />
-                                ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {q.imageUrl && (
-                      <div className="my-2 flex justify-center">
-                        <img
-                          src={q.imageUrl}
-                          alt={`Savol #${q.number} tasviri`}
-                          className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
-                        />
-                      </div>
-                    )}
-
                     {q.passage && (
                       <div
                         className="text-xs text-slate-700 bg-slate-50 p-3.5 rounded-xl sat-serif"
@@ -1603,12 +1624,100 @@ export const StudentDashboardView: React.FC<StudentDashboardViewProps> = ({
                       />
                     )}
 
-                    <div
-                      className="text-sm font-medium text-slate-900 sat-serif"
-                      dangerouslySetInnerHTML={{
-                        __html: renderSATTextWithMath(q.prompt),
-                      }}
-                    />
+                    {(() => {
+                      const hasAttachedMedia = Boolean(
+                        (q.tableData && q.tableData.headers.length > 0) ||
+                          (q.imageUrl && q.imageUrl.trim())
+                      );
+                      const { leadingHeading, bodyPrompt } =
+                        splitQuestionPromptForMedia(
+                          q.prompt,
+                          hasAttachedMedia,
+                          q.tableData?.title
+                        );
+
+                      return (
+                        <>
+                          {leadingHeading && (
+                            <div
+                              className="text-sm font-bold text-slate-900 sat-serif"
+                              dangerouslySetInnerHTML={{
+                                __html: renderSATTextWithMath(leadingHeading),
+                              }}
+                            />
+                          )}
+
+                          {q.tableData && q.tableData.headers.length > 0 && (
+                            <div className="my-2 overflow-x-auto rounded-xl border border-slate-300 bg-white shadow-2xs max-w-2xl">
+                              {q.tableData.title && (
+                                <div
+                                  className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif"
+                                  dangerouslySetInnerHTML={{
+                                    __html: renderSATTextWithMath(
+                                      q.tableData.title,
+                                      true
+                                    ),
+                                  }}
+                                />
+                              )}
+                              <table className="w-full border-collapse text-left text-xs sat-serif">
+                                <thead>
+                                  <tr className="bg-slate-50 border-b border-slate-300">
+                                    {q.tableData.headers.map((h, hIdx) => (
+                                      <th
+                                        key={hIdx}
+                                        className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                        dangerouslySetInnerHTML={{
+                                          __html: renderSATTextWithMath(
+                                            h || `Ustun ${hIdx + 1}`,
+                                            true
+                                          ),
+                                        }}
+                                      />
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200">
+                                  {q.tableData.rows.map((row, rIdx) => (
+                                    <tr key={rIdx} className="hover:bg-slate-50/60">
+                                      {q.tableData!.headers.map((_, cIdx) => (
+                                        <td
+                                          key={cIdx}
+                                          className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                          dangerouslySetInnerHTML={{
+                                            __html: renderSATTextWithMath(
+                                              row[cIdx] || '',
+                                              true
+                                            ),
+                                          }}
+                                        />
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+
+                          {q.imageUrl && (
+                            <div className="my-2 flex justify-center">
+                              <img
+                                src={q.imageUrl}
+                                alt={`Savol #${q.number} tasviri`}
+                                className="max-h-64 w-auto max-w-full rounded-xl border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                              />
+                            </div>
+                          )}
+
+                          <div
+                            className="text-sm font-medium text-slate-900 sat-serif whitespace-pre-line"
+                            dangerouslySetInnerHTML={{
+                              __html: renderSATTextWithMath(bodyPrompt),
+                            }}
+                          />
+                        </>
+                      );
+                    })()}
 
                     {q.explanation && (
                       <div className="text-xs text-slate-600 bg-blue-50/50 border border-blue-100 rounded-xl p-3">

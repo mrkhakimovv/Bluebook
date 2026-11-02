@@ -246,4 +246,48 @@ export function renderSprAnswerPreview(rawAnswer: string): string {
   }
 }
 
+/**
+ * Splits a question prompt into an optional short leading heading (e.g. "Wing Display")
+ * and the main question body when the question has an attached table or image, so that
+ * the table/image renders directly in the question flow right below the heading and above the body text.
+ */
+export function splitQuestionPromptForMedia(
+  prompt: string,
+  hasMedia: boolean,
+  existingTableTitle?: string
+): { leadingHeading?: string; bodyPrompt: string } {
+  const raw = (prompt || '').trim();
+  if (!raw || !hasMedia || !raw.includes('\n')) {
+    return { bodyPrompt: raw };
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const firstLine = (lines[0] || '').trim();
+  const rest = lines.slice(1).join('\n').trim();
+
+  if (
+    firstLine.length > 0 &&
+    firstLine.length <= 75 &&
+    rest.length >= 25 &&
+    !/[.?!:;]$/.test(firstLine) &&
+    !/^(?:which|what|based on|according to|in the|if |for |how |why |when |where |the following|a student|one |while |although )/i.test(
+      firstLine
+    )
+  ) {
+    if (
+      existingTableTitle &&
+      existingTableTitle.trim().toLowerCase() === firstLine.toLowerCase()
+    ) {
+      return { bodyPrompt: rest };
+    }
+    return {
+      leadingHeading: firstLine,
+      bodyPrompt: rest,
+    };
+  }
+
+  return { bodyPrompt: raw };
+}
+
+
 

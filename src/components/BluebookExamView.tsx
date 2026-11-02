@@ -38,7 +38,11 @@ import { ReferenceModal } from './ReferenceModal';
 import { DesmosModal } from './DesmosModal';
 import { QuestionNavigatorPopover } from './QuestionNavigatorPopover';
 import { CheckYourWorkView } from './CheckYourWorkView';
-import { renderSATTextWithMath, renderSprAnswerPreview } from '../utils/mathRenderer';
+import {
+  renderSATTextWithMath,
+  renderSprAnswerPreview,
+  splitQuestionPromptForMedia,
+} from '../utils/mathRenderer';
 
 interface BluebookExamViewProps {
   session: StudentSession;
@@ -652,14 +656,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
   }
 
   const isSprQuestion = currentQuestion?.type === 'spr';
-  const hasStimulusMediaInLeftPane =
-    Boolean(currentQuestion?.passage) ||
-    (!isMathSection &&
-      Boolean(
-        (currentQuestion?.tableData && currentQuestion.tableData.headers.length > 0) ||
-          currentQuestion?.imageUrl
-      ));
-  const hasSplitPassage = hasStimulusMediaInLeftPane || isSprQuestion;
+  const hasSplitPassage = Boolean(currentQuestion?.passage?.trim()) || isSprQuestion;
 
   const renderStimulusTableAndImage = (q: SATQuestion) => {
     const hasTable = Boolean(q.tableData && q.tableData.headers.length > 0);
@@ -667,7 +664,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
     if (!hasTable && !hasImage) return null;
 
     return (
-      <div className="space-y-4 mb-4 max-w-2xl">
+      <div className="space-y-4 my-2 max-w-2xl">
         {hasTable && q.tableData && (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse border border-gray-800 text-[14px] sat-serif text-gray-900 bg-white">
@@ -678,7 +675,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                       colSpan={Math.max(1, q.tableData.headers.length)}
                       className="border border-gray-800 px-3 py-2 text-center font-bold text-gray-900"
                       dangerouslySetInnerHTML={{
-                        __html: renderSATTextWithMath(q.tableData.title),
+                        __html: renderSATTextWithMath(q.tableData.title, isMathSection),
                       }}
                     />
                   </tr>
@@ -689,7 +686,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                       key={hIdx}
                       className="border border-gray-800 px-3 py-2 text-left font-bold text-gray-900"
                       dangerouslySetInnerHTML={{
-                        __html: renderSATTextWithMath(hdr),
+                        __html: renderSATTextWithMath(hdr, isMathSection),
                       }}
                     />
                   ))}
@@ -703,7 +700,7 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                         key={cIdx}
                         className="border border-gray-800 px-3 py-2 align-top text-gray-900"
                         dangerouslySetInnerHTML={{
-                          __html: renderSATTextWithMath(row[cIdx] ?? ''),
+                          __html: renderSATTextWithMath(row[cIdx] ?? '', isMathSection),
                         }}
                       />
                     ))}
@@ -1167,8 +1164,6 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
                   </div>
                 )}
 
-                {hasStimulusMediaInLeftPane && renderStimulusTableAndImage(currentQuestion)}
-
                 {currentQuestion.passage && (
                   <div
                     className={`font-serif ${
@@ -1423,29 +1418,54 @@ export const BluebookExamView: React.FC<BluebookExamViewProps> = ({
         </div>
 
         {/* Question Body Container */}
-        <div className="pl-3 pr-1 space-y-5">
-          {!hasStimulusMediaInLeftPane && renderStimulusTableAndImage(currentQuestion)}
+        <div className="pl-3 pr-1 space-y-4">
+          {(() => {
+            const hasAttachedMedia = Boolean(
+              (currentQuestion.tableData && currentQuestion.tableData.headers.length > 0) ||
+                (currentQuestion.imageUrl && currentQuestion.imageUrl.trim())
+            );
+            const { leadingHeading, bodyPrompt } = splitQuestionPromptForMedia(
+              currentQuestion.prompt,
+              hasAttachedMedia,
+              currentQuestion.tableData?.title
+            );
 
-          {currentQuestion.mathEquation && currentQuestion.mathEquation.length > 0 && (
-            <div className="py-2 text-center text-[17px] text-[#111111] space-y-2.5">
-              {currentQuestion.mathEquation.map((eq, i) => (
+            return (
+              <>
+                {leadingHeading && (
+                  <div
+                    className="sat-serif text-[16.5px] font-semibold leading-[1.6] text-[#111111]"
+                    dangerouslySetInnerHTML={{
+                      __html: renderHighlightedHtml(leadingHeading),
+                    }}
+                  />
+                )}
+
+                {renderStimulusTableAndImage(currentQuestion)}
+
+                {currentQuestion.mathEquation && currentQuestion.mathEquation.length > 0 && (
+                  <div className="py-2 text-center text-[17px] text-[#111111] space-y-2.5">
+                    {currentQuestion.mathEquation.map((eq, i) => (
+                      <div
+                        key={i}
+                        dangerouslySetInnerHTML={{
+                          __html: renderSATTextWithMath(eq, true),
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Question Prompt in authentic SAT Serif + KaTeX */}
                 <div
-                  key={i}
+                  className="sat-serif text-[16.5px] leading-[1.7] text-[#111111]"
                   dangerouslySetInnerHTML={{
-                    __html: renderSATTextWithMath(eq, true),
+                    __html: renderHighlightedHtml(bodyPrompt),
                   }}
                 />
-              ))}
-            </div>
-          )}
-
-          {/* Question Prompt in authentic SAT Serif + KaTeX */}
-          <div
-            className="sat-serif text-[16.5px] leading-[1.7] text-[#111111]"
-            dangerouslySetInnerHTML={{
-              __html: renderHighlightedHtml(currentQuestion.prompt),
-            }}
-          />
+              </>
+            );
+          })()}
 
           {/* Answer Area: MCQ vs Student-Produced Response */}
           {currentQuestion.type === 'mcq' && currentQuestion.options ? (

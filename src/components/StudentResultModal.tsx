@@ -26,7 +26,10 @@ import {
   getModuleQuestionsForSession,
 } from '../lib/scoring/rasch';
 import { isAnswerCorrect } from '../data/defaultQuestions';
-import { renderSATTextWithMath } from '../utils/mathRenderer';
+import {
+  renderSATTextWithMath,
+  splitQuestionPromptForMedia,
+} from '../utils/mathRenderer';
 
 interface StudentResultViewProps {
   session: StudentSession;
@@ -461,12 +464,100 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                     />
                   )}
 
-                  <div
-                    className="text-sm font-medium text-slate-900 sat-serif"
-                    dangerouslySetInnerHTML={{
-                      __html: renderSATTextWithMath(q.prompt),
-                    }}
-                  />
+                  {(() => {
+                    const hasAttachedMedia = Boolean(
+                      (q.tableData && q.tableData.headers.length > 0) ||
+                        (q.imageUrl && q.imageUrl.trim())
+                    );
+                    const { leadingHeading, bodyPrompt } =
+                      splitQuestionPromptForMedia(
+                        q.prompt,
+                        hasAttachedMedia,
+                        q.tableData?.title
+                      );
+
+                    return (
+                      <>
+                        {leadingHeading && (
+                          <div
+                            className="text-sm font-bold text-slate-900 sat-serif"
+                            dangerouslySetInnerHTML={{
+                              __html: renderSATTextWithMath(leadingHeading),
+                            }}
+                          />
+                        )}
+
+                        {q.tableData && q.tableData.headers.length > 0 && (
+                          <div className="my-2 overflow-x-auto rounded-lg border border-slate-300 bg-white shadow-2xs max-w-2xl">
+                            {q.tableData.title && (
+                              <div
+                                className="bg-slate-100 border-b border-slate-300 px-3.5 py-2 text-xs font-bold text-slate-900 text-center sat-serif"
+                                dangerouslySetInnerHTML={{
+                                  __html: renderSATTextWithMath(
+                                    q.tableData.title,
+                                    true
+                                  ),
+                                }}
+                              />
+                            )}
+                            <table className="w-full border-collapse text-left text-xs sat-serif">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-300">
+                                  {q.tableData.headers.map((h, hIdx) => (
+                                    <th
+                                      key={hIdx}
+                                      className="px-3 py-2 font-bold text-slate-900 border-r last:border-r-0 border-slate-200"
+                                      dangerouslySetInnerHTML={{
+                                        __html: renderSATTextWithMath(
+                                          h || `Ustun ${hIdx + 1}`,
+                                          true
+                                        ),
+                                      }}
+                                    />
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-200">
+                                {q.tableData.rows.map((row, rIdx) => (
+                                  <tr key={rIdx} className="hover:bg-slate-50/60">
+                                    {q.tableData!.headers.map((_, cIdx) => (
+                                      <td
+                                        key={cIdx}
+                                        className="px-3 py-2 text-slate-800 border-r last:border-r-0 border-slate-200"
+                                        dangerouslySetInnerHTML={{
+                                          __html: renderSATTextWithMath(
+                                            row[cIdx] || '',
+                                            true
+                                          ),
+                                        }}
+                                      />
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {q.imageUrl && (
+                          <div className="my-2 flex justify-center">
+                            <img
+                              src={q.imageUrl}
+                              alt={`Savol #${q.number} tasviri`}
+                              className="max-h-64 w-auto max-w-full rounded-lg border border-slate-200 bg-white p-2 object-contain shadow-2xs"
+                            />
+                          </div>
+                        )}
+
+                        <div
+                          className="text-sm font-medium text-slate-900 sat-serif whitespace-pre-line"
+                          dangerouslySetInnerHTML={{
+                            __html: renderSATTextWithMath(bodyPrompt),
+                          }}
+                        />
+                      </>
+                    );
+                  })()}
 
                   {q.explanation && (
                     <p
